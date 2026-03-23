@@ -1,0 +1,19 @@
+# MiroFish backend dependencies (patched — zep-cloud removed)
+flask>=3.0.0
+flask-cors
+openai>=1.0.0
+camel-oasis==0.2.5
+camel-ai==0.2.78
+PyMuPDF>=1.24.0
+charset-normalizer
+chardet
+python-dotenv
+pydantic>=2.0.0
+
+# Football data pipeline
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+pandas>=2.0.0
+aiohttp>=3.9.0
+apscheduler>=3.10.0

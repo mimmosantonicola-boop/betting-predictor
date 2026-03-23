@@ -1,0 +1,61 @@
+# render.yaml — Deploy SAI Tipster to Render.com (free tier)
+# Docs: https://render.com/docs/yaml-spec
+
+services:
+  - type: web
+    name: sai-tipster   # your app URL will be https://sai-tipster.onrender.com
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+
+    # Health check — Render uses this to know when the app is ready
+    healthCheckPath: /api/health
+
+    envVars:
+      # ── LLM (Groq) ──────────────────────────────────────────────────────────
+      - key: LLM_API_KEY
+        sync: false         # set manually in Render dashboard
+
+      - key: LLM_BASE_URL
+        value: https://api.groq.com/openai/v1
+
+      - key: LLM_MODEL_NAME
+        value: llama-3.3-70b-versatile
+
+      # ── Football data ───────────────────────────────────────────────────────
+      - key: FOOTBALL_DATA_API_KEY
+        sync: false
+
+      # ── Odds API ────────────────────────────────────────────────────────────
+      - key: ODDS_API_KEY
+        sync: false
+
+      # ── News APIs ───────────────────────────────────────────────────────────
+      - key: NEWS_API_KEY
+        sync: false
+
+      - key: GNEWS_API_KEY
+        sync: false
+
+      # ── MiroFish ─────────────────────────────────────────────────────────────
+      - key: MIROFISH_API_URL
+        value: http://localhost:5001
+
+      # ── App ──────────────────────────────────────────────────────────────────
+      - key: PORT
+        value: 8080
+
+      - key: FLASK_ENV
+        value: production
+
+      - key: LOCAL_ZEP_DB_PATH
+        value: /app/data/local_memory.db
+
+      - key: CACHE_DB_PATH
+        value: /app/data/cache.db
+
+    # Persistent disk — keeps prediction database and memory across deploys
+    disk:
+      name: sai-tipster-data
+      mountPath: /app/data
+      sizeGB: 1

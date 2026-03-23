@@ -1,0 +1,24 @@
+# Environment — never commit these
+.env
+*.env.local
+
+# Runtime databases (generated at runtime)
+**/*.db
+**/*.db-shm
+**/*.db-wal
+
+# Large folders downloaded at runtime or build time
+mirofish/
+frontend_dist/
+node_modules/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# OS
+.DS_Store
+Thumbs.db
