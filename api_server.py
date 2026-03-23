@@ -352,15 +352,14 @@ def clear_cache():
 
 # ── Serve Vue.js frontend (production) ────────────────────────────────────────
 
-@app.route("/", defaults={"path": ""})
-@app.route("/<path:path>")
-def serve_frontend(path: str):
-    """Serve the built Vue.js app for all non-API routes."""
-    static = Path("frontend_static")
-  if path and (static / path).exists():
-      return send_from_directory("frontend_static", path)
-  return send_from_directory("frontend_static", "index.html")
-        return send_from_directory("frontend_dist", "index.html")
+ @app.route("/", defaults={"path": ""})
+  @app.route("/<path:path>")
+  def serve_frontend(path: str):
+      """Serve the static frontend for all non-API routes."""
+      static = Path("frontend_static")
+      if path and (static / path).exists():
+          return send_from_directory("frontend_static", path)
+      return send_from_directory("frontend_static", "index.html")
     return jsonify({"message": "Frontend not built yet. Run: npm run build in mirofish/"}), 200
 
 
