@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from football import FootballDataClient, FBrefScraper, MatchReport, Fixture
+from football import FootballDataClient, FBrefScraper, ApiFootballClient, MatchReport, Fixture
 from football.models import TeamStats, InjuryReport
 from seed import build_seed_document
 from predictor.mirofish_client import MiroFishClient
@@ -35,8 +35,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 class BettingOrchestrator:
     """Coordinates the full data → prediction pipeline."""
 
+    # Competitions served by ApiFootballClient instead of football-data.org
+    _API_FOOTBALL_CODES = {"WC", "WCQE", "WCQA", "WCQC", "WCQAS", "WCQAF"}
+
     def __init__(self):
         self.fd_client = FootballDataClient()
+        self.af_client = ApiFootballClient()
         self.fbref = FBrefScraper()
         self.mf_client = MiroFishClient()
         self.parser = ResultParser()
@@ -83,7 +87,10 @@ class BettingOrchestrator:
         fixtures = []
         for code in ("SA", "CL", "WC", "WCQE", "WCQA", "WCQC", "WCQAS", "WCQAF"):
             try:
-                upcoming = self.fd_client.get_upcoming_fixtures(code, days_ahead=14)
+                if code in self._API_FOOTBALL_CODES:
+                    upcoming = self.af_client.get_upcoming_fixtures(code, days_ahead=14)
+                else:
+                    upcoming = self.fd_client.get_upcoming_fixtures(code, days_ahead=14)
                 fixtures.extend(upcoming)
             except Exception as e:
                 logger.warning("Could not fetch %s fixtures: %s", code, e)

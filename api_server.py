@@ -33,7 +33,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from football import FootballDataClient
+from football import FootballDataClient, ApiFootballClient
 from data.odds_api import OddsAPIClient
 from data.news_fetcher import NewsFetcher
 from data.cache import get_cache, TTL
@@ -52,6 +52,7 @@ CORS(app, origins="*")
 
 _orchestrator: BettingOrchestrator | None = None
 _fd_client: FootballDataClient | None = None
+_af_client: ApiFootballClient | None = None
 _odds_client: OddsAPIClient | None = None
 _news_fetcher: NewsFetcher | None = None
 _cache = get_cache()
@@ -71,6 +72,16 @@ def get_fd() -> FootballDataClient:
     if _fd_client is None:
         _fd_client = FootballDataClient()
     return _fd_client
+
+
+_AF_CODES = {"WC", "WCQE", "WCQA", "WCQC", "WCQAS", "WCQAF"}
+
+
+def get_af() -> ApiFootballClient:
+    global _af_client
+    if _af_client is None:
+        _af_client = ApiFootballClient()
+    return _af_client
 
 
 def get_odds() -> OddsAPIClient:
@@ -295,7 +306,8 @@ def standings(competition_code: str):
         return jsonify({"error": f"Unknown competition: {competition_code}"}), 400
 
     def fetch():
-        rows = get_fd().get_standings(competition_code)
+        client = get_af() if competition_code in _AF_CODES else get_fd()
+        rows = client.get_standings(competition_code)
         return [r.model_dump() for r in rows]
 
     try:
