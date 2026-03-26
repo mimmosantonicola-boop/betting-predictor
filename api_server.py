@@ -74,7 +74,7 @@ def get_fd() -> FootballDataClient:
     return _fd_client
 
 
-_AF_CODES = {"WC", "WCQE", "WCQA", "WCQC", "WCQAS", "WCQAF"}
+_AF_CODES = {"WC", "WCQA", "WCQC", "WCQAS", "WCQAF"}
 
 
 def get_af() -> ApiFootballClient:
