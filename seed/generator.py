@@ -95,11 +95,29 @@ class SeedGenerator:
                 "**Serie A** is the top professional football league in Italy. "
                 "Teams play 38 matches in a season. The top 4 qualify for the Champions League."
             )
-        else:
+        elif f.competition_code == "CL":
             comp_desc = (
                 "**UEFA Champions League** is Europe's premier club football competition. "
                 "The current stage determines which teams advance to the knockout rounds."
             )
+        elif f.competition_code == "WC":
+            comp_desc = (
+                "**FIFA World Cup** is the most prestigious international football tournament. "
+                "National teams compete for the world championship every four years."
+            )
+        elif f.competition_code in ("WCQE", "WCQA", "WCQC", "WCQAS", "WCQAF"):
+            region_map = {
+                "WCQE": "European", "WCQA": "South American",
+                "WCQC": "CONCACAF", "WCQAS": "Asian", "WCQAF": "African",
+            }
+            region = region_map.get(f.competition_code, "")
+            comp_desc = (
+                f"**{region} World Cup Qualifying** — national teams competing for a place "
+                f"at the FIFA World Cup 2026. Every point is crucial as only a limited number "
+                f"of spots are available from this confederation."
+            )
+        else:
+            comp_desc = f"**{f.competition}** — an international football competition."
 
         standing_info = ""
         if hs and as_:

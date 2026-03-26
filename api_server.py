@@ -201,19 +201,22 @@ def _compute_outcomes(hs: int, as_: int) -> dict:
 
 # Maps market key → consensus odds field name in live_odds.consensus
 _ODDS_KEY_MAP: dict[str, str] = {
-    "home_win":  "home",
-    "draw":      "draw",
-    "away_win":  "away",
-    "over_2_5":  "over_2_5",
-    "under_2_5": "under_2_5",
-    "btts_yes":  "btts_yes",
-    "btts_no":   "btts_no",
-    # over_3_5/under_3_5 have no odds counterpart — always use ai_pct
+    "home_win":         "home",
+    "draw":             "draw",
+    "away_win":         "away",
+    "over_2_5":         "over_2_5",
+    "under_2_5":        "under_2_5",
+    "btts_yes":         "btts_yes",
+    "btts_no":          "btts_no",
+    # over_3_5/under_3_5, corners, cards have no odds counterpart — always use ai_pct
 }
 
 _COUNTERPART: dict[str, str] = {
-    "over_2_5": "under_2_5", "under_2_5": "over_2_5",
-    "btts_yes": "btts_no",   "btts_no":   "btts_yes",
+    "over_2_5":           "under_2_5",    "under_2_5":          "over_2_5",
+    "over_3_5":           "under_3_5",    "under_3_5":          "over_3_5",
+    "btts_yes":           "btts_no",      "btts_no":            "btts_yes",
+    "over_9_5_corners":   "under_9_5_corners", "under_9_5_corners": "over_9_5_corners",
+    "over_3_5_cards":     "under_3_5_cards",   "under_3_5_cards":   "over_3_5_cards",
 }
 
 
@@ -528,15 +531,20 @@ def edge_stats():
 
     # market_key → (ai_pred_field, outcome_key)
     MARKET_MAP = {
-        "home_win":  ("home_win_pct",  "home_win"),
-        "draw":      ("draw_pct",      "draw"),
-        "away_win":  ("away_win_pct",  "away_win"),
-        "over_2_5":  ("over_2_5_pct",  "over_2_5"),
-        "under_2_5": ("under_2_5_pct", "under_2_5"),
-        "over_3_5":  ("over_3_5_pct",  "over_3_5"),
-        "under_3_5": ("under_3_5_pct", "under_3_5"),
-        "btts_yes":  ("btts_yes_pct",  "btts_yes"),
-        "btts_no":   ("btts_no_pct",   "btts_no"),
+        "home_win":           ("home_win_pct",           "home_win"),
+        "draw":               ("draw_pct",               "draw"),
+        "away_win":           ("away_win_pct",           "away_win"),
+        "over_2_5":           ("over_2_5_pct",           "over_2_5"),
+        "under_2_5":          ("under_2_5_pct",          "under_2_5"),
+        "over_3_5":           ("over_3_5_pct",           "over_3_5"),
+        "under_3_5":          ("under_3_5_pct",          "under_3_5"),
+        "btts_yes":           ("btts_yes_pct",           "btts_yes"),
+        "btts_no":            ("btts_no_pct",            "btts_no"),
+        "over_9_5_corners":   ("over_9_5_corners_pct",  "over_9_5_corners"),
+        "under_9_5_corners":  ("under_9_5_corners_pct", "under_9_5_corners"),
+        "over_3_5_cards":     ("over_3_5_cards_pct",    "over_3_5_cards"),
+        "under_3_5_cards":    ("under_3_5_cards_pct",   "under_3_5_cards"),
+        "red_card":           ("red_card_pct",           "red_card"),
     }
 
     # Accumulate per-market: list of (implied_pct, did_hit)

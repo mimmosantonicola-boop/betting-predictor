@@ -44,6 +44,7 @@
     .badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:10px;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
     .badge.sa{background:#1a2f1a;color:#3fb950;border:1px solid #238636}
     .badge.cl{background:#1a2340;color:#79c0ff;border:1px solid #1f6feb}
+    .badge.wc,.badge.wcqe,.badge.wcqa,.badge.wcqc,.badge.wcqas,.badge.wcqaf{background:#2a1a10;color:#f0a050;border:1px solid #a0622a}
     .badge.green{background:#1a2f1a;color:#3fb950}
     .badge.yellow{background:#2a2510;color:#e3b341;display:flex;align-items:center;gap:4px}
 
@@ -637,7 +638,14 @@ createApp({
       if (!iso) return ''
       return new Date(iso).toLocaleDateString('en-GB',{day:'numeric',month:'short'})
     }
-    function compClass(c) { return c&&c.toLowerCase().includes('serie')?'sa':'cl' }
+    function compClass(c) {
+      if (!c) return 'cl'
+      const l = c.toLowerCase()
+      if (l.includes('serie')) return 'sa'
+      if (l.includes('champions')) return 'cl'
+      if (l.includes('world cup') || l.includes('wcq') || l.includes('qualification')) return 'wc'
+      return 'cl'
+    }
     function mkts(p) {
       return [
         {label:'Goals O/U 2.5', aLbl:'Over', bLbl:'Under', a:p.over_2_5_pct, b:p.under_2_5_pct},
@@ -687,6 +695,9 @@ createApp({
         over_2_5: 'Over 2.5', under_2_5: 'Under 2.5',
         over_3_5: 'Over 3.5', under_3_5: 'Under 3.5',
         btts_yes: 'BTTS Yes', btts_no: 'BTTS No',
+        over_9_5_corners: 'Corners +9.5', under_9_5_corners: 'Corners -9.5',
+        over_3_5_cards: 'Cards +3.5', under_3_5_cards: 'Cards -3.5',
+        red_card: 'Red Card',
       }
       return MAP[key] || key
     }
