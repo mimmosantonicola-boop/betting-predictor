@@ -36,7 +36,7 @@ class BettingOrchestrator:
     """Coordinates the full data → prediction pipeline."""
 
     # Competitions served by ApiFootballClient instead of football-data.org
-    _API_FOOTBALL_CODES = {"WC", "WCQE", "WCQA", "WCQC", "WCQAS", "WCQAF"}
+    _API_FOOTBALL_CODES = {"WC", "WCQA", "WCQC", "WCQAS", "WCQAF"}
 
     def __init__(self):
         self.fd_client = FootballDataClient()
