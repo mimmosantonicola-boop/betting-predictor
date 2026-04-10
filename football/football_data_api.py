@@ -30,6 +30,7 @@ BASE_URL = "https://api.football-data.org/v4"
 COMPETITIONS = {
     "SA":   "Serie A",
     "CL":   "Champions League",
+    "ECL":  "UEFA Conference League",
     "WC":   "FIFA World Cup",
     "WCQE": "WCQ Europe",
     "WCQA": "WCQ Americas",

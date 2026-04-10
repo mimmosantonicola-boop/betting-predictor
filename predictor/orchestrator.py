@@ -85,7 +85,7 @@ class BettingOrchestrator:
     def get_upcoming_fixtures(self) -> list[Fixture]:
         """Return all upcoming fixtures across all supported competitions."""
         fixtures = []
-        for code in ("SA", "CL", "WC", "WCQE", "WCQA", "WCQC", "WCQAS", "WCQAF"):
+        for code in ("SA", "CL", "ECL", "WC", "WCQE", "WCQA", "WCQC", "WCQAS", "WCQAF"):
             try:
                 if code in self._API_FOOTBALL_CODES:
                     upcoming = self.af_client.get_upcoming_fixtures(code, days_ahead=14)

@@ -100,6 +100,12 @@ class SeedGenerator:
                 "**UEFA Champions League** is Europe's premier club football competition. "
                 "The current stage determines which teams advance to the knockout rounds."
             )
+        elif f.competition_code == "ECL":
+            comp_desc = (
+                "**UEFA Europa Conference League** is UEFA's third-tier club competition. "
+                "It features clubs from across Europe competing in a knockout format, "
+                "with the current stage determining which teams advance."
+            )
         elif f.competition_code == "WC":
             comp_desc = (
                 "**FIFA World Cup** is the most prestigious international football tournament. "
@@ -290,6 +296,12 @@ class SeedGenerator:
             lines.append(
                 "Champions League matches often feature more tactical caution, "
                 "especially in away fixtures. Home advantage is significant."
+            )
+        elif f.competition_code == "ECL":
+            lines.append(
+                "Conference League matches can be unpredictable — many clubs treat "
+                "this competition as a genuine route to European glory. "
+                "Expect committed performances from both sides."
             )
 
         if not lines[1:]:
