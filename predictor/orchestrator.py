@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from football import FootballDataClient, FBrefScraper, ApiFootballClient, MatchReport, Fixture
+from football import FootballDataClient, FBrefScraper, ApiFootballClient, EspnClient, MatchReport, Fixture
 from football.models import TeamStats, InjuryReport
 from seed import build_seed_document
 from predictor.mirofish_client import MiroFishClient
@@ -37,10 +37,12 @@ class BettingOrchestrator:
 
     # Competitions served by ApiFootballClient instead of football-data.org
     _API_FOOTBALL_CODES = {"WC", "WCQA", "WCQC", "WCQAS", "WCQAF"}
+    _ESPN_CODES = {"ECL"}
 
     def __init__(self):
         self.fd_client = FootballDataClient()
         self.af_client = ApiFootballClient()
+        self.espn_client = EspnClient()
         self.fbref = FBrefScraper()
         self.mf_client = MiroFishClient()
         self.parser = ResultParser()
@@ -87,7 +89,9 @@ class BettingOrchestrator:
         fixtures = []
         for code in ("SA", "CL", "ECL", "WC", "WCQE", "WCQA", "WCQC", "WCQAS", "WCQAF"):
             try:
-                if code in self._API_FOOTBALL_CODES:
+                if code in self._ESPN_CODES:
+                    upcoming = self.espn_client.get_upcoming_fixtures(code, days_ahead=14)
+                elif code in self._API_FOOTBALL_CODES:
                     upcoming = self.af_client.get_upcoming_fixtures(code, days_ahead=14)
                 else:
                     upcoming = self.fd_client.get_upcoming_fixtures(code, days_ahead=14)

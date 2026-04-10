@@ -34,10 +34,10 @@ BASE_URL = "https://v3.football.api-sports.io"
 WCQ_LEAGUES: dict[str, tuple[int, str]] = {
     "WC":    (1,  "FIFA World Cup"),
     "WCQE":  (32, "WCQ Europe"),
-    "WCQA":  (34, "WCQ Americas"),
-    "WCQC":  (30, "WCQ CONCACAF"),
-    "WCQAS": (36, "WCQ Asia"),
-    "WCQAF": (29, "WCQ Africa"),
+    "WCQA":  (34,  "WCQ Americas"),
+    "WCQC":  (30,  "WCQ CONCACAF"),
+    "WCQAS": (36,  "WCQ Asia"),
+    "WCQAF": (29,  "WCQ Africa"),
 }
 
 # Status short codes → our canonical status
