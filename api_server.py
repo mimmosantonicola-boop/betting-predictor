@@ -27,6 +27,18 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+# PostgreSQL support (Supabase)
+_DATABASE_URL = os.getenv("DATABASE_URL")
+if _DATABASE_URL:
+    try:
+        import psycopg2
+        import psycopg2.extras
+        _USE_PG = True
+    except ImportError:
+        _USE_PG = False
+else:
+    _USE_PG = False
+
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -100,19 +112,40 @@ def get_news() -> NewsFetcher:
 
 # ── Predictions DB ──────────────────────────────────────────────────────────────────
 
-def _init_pred_db():
+def _get_conn():
+    """Return a DB connection — PostgreSQL if DATABASE_URL set, else SQLite."""
+    if _USE_PG:
+        return psycopg2.connect(_DATABASE_URL)
     _PRED_DB.parent.mkdir(exist_ok=True)
-    with sqlite3.connect(_PRED_DB) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS predictions (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                fixture_id  INTEGER NOT NULL UNIQUE,
-                match_label TEXT    NOT NULL,
-                competition TEXT    NOT NULL,
-                created_at  TEXT    NOT NULL,
-                data        TEXT    NOT NULL
-            )
-        """)
+    return sqlite3.connect(_PRED_DB)
+
+
+def _init_pred_db():
+    if _USE_PG:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS predictions (
+                        id          SERIAL PRIMARY KEY,
+                        fixture_id  INTEGER NOT NULL UNIQUE,
+                        match_label TEXT    NOT NULL,
+                        competition TEXT    NOT NULL,
+                        created_at  TEXT    NOT NULL,
+                        data        TEXT    NOT NULL
+                    )
+                """)
+    else:
+        with _get_conn() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS predictions (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fixture_id  INTEGER NOT NULL UNIQUE,
+                    match_label TEXT    NOT NULL,
+                    competition TEXT    NOT NULL,
+                    created_at  TEXT    NOT NULL,
+                    data        TEXT    NOT NULL
+                )
+            """)
 
 
 # Initialise DB immediately at import time (works under Gunicorn/Render, not just __main__)
@@ -120,21 +153,42 @@ _init_pred_db()
 
 
 def _save_pred(fixture_id: int, match_label: str, competition: str, data: dict):
-    with sqlite3.connect(_PRED_DB) as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO predictions "
-            "(fixture_id, match_label, competition, created_at, data) VALUES (?,?,?,?,?)",
-            (fixture_id, match_label, competition,
-             datetime.now(timezone.utc).isoformat(), json.dumps(data)),
-        )
+    ts = datetime.now(timezone.utc).isoformat()
+    raw = json.dumps(data)
+    if _USE_PG:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO predictions (fixture_id, match_label, competition, created_at, data) "
+                    "VALUES (%s,%s,%s,%s,%s) ON CONFLICT (fixture_id) DO UPDATE "
+                    "SET match_label=EXCLUDED.match_label, competition=EXCLUDED.competition, "
+                    "created_at=EXCLUDED.created_at, data=EXCLUDED.data",
+                    (fixture_id, match_label, competition, ts, raw),
+                )
+    else:
+        with _get_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO predictions "
+                "(fixture_id, match_label, competition, created_at, data) VALUES (?,?,?,?,?)",
+                (fixture_id, match_label, competition, ts, raw),
+            )
 
 
 def _load_preds() -> list[dict]:
-    with sqlite3.connect(_PRED_DB) as conn:
-        rows = conn.execute(
-            "SELECT fixture_id, match_label, competition, created_at, data "
-            "FROM predictions ORDER BY created_at DESC LIMIT 100"
-        ).fetchall()
+    if _USE_PG:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT fixture_id, match_label, competition, created_at, data "
+                    "FROM predictions ORDER BY created_at DESC LIMIT 100"
+                )
+                rows = cur.fetchall()
+    else:
+        with _get_conn() as conn:
+            rows = conn.execute(
+                "SELECT fixture_id, match_label, competition, created_at, data "
+                "FROM predictions ORDER BY created_at DESC LIMIT 100"
+            ).fetchall()
     out = []
     for fid, label, comp, ts, raw in rows:
         entry = json.loads(raw)
@@ -145,37 +199,55 @@ def _load_preds() -> list[dict]:
 
 
 def _update_pred_data(fixture_id: int, patch: dict) -> bool:
-    """Merge patch dict into the existing data JSON blob for a prediction."""
-    with sqlite3.connect(_PRED_DB) as conn:
-        row = conn.execute(
-            "SELECT data FROM predictions WHERE fixture_id = ?", (fixture_id,)
-        ).fetchone()
-        if not row:
-            return False
-        data = json.loads(row[0])
-        data.update(patch)
-        conn.execute(
-            "UPDATE predictions SET data = ? WHERE fixture_id = ?",
-            (json.dumps(data), fixture_id),
-        )
+    if _USE_PG:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT data FROM predictions WHERE fixture_id = %s", (fixture_id,))
+                row = cur.fetchone()
+                if not row:
+                    return False
+                data = json.loads(row[0])
+                data.update(patch)
+                cur.execute("UPDATE predictions SET data = %s WHERE fixture_id = %s",
+                            (json.dumps(data), fixture_id))
+    else:
+        with _get_conn() as conn:
+            row = conn.execute(
+                "SELECT data FROM predictions WHERE fixture_id = ?", (fixture_id,)
+            ).fetchone()
+            if not row:
+                return False
+            data = json.loads(row[0])
+            data.update(patch)
+            conn.execute(
+                "UPDATE predictions SET data = ? WHERE fixture_id = ?",
+                (json.dumps(data), fixture_id),
+            )
     return True
 
 
 def _load_resolved_preds() -> list[dict]:
-    """Load predictions that have outcomes recorded."""
-    with sqlite3.connect(_PRED_DB) as conn:
-        try:
-            rows = conn.execute(
-                "SELECT fixture_id, data FROM predictions "
-                "WHERE json_extract(data, '$.outcomes') IS NOT NULL"
-            ).fetchall()
-        except sqlite3.OperationalError:
-            # Fallback for older SQLite without json_extract
-            all_rows = conn.execute(
-                "SELECT fixture_id, data FROM predictions"
-            ).fetchall()
-            rows = [(fid, raw) for fid, raw in all_rows
-                    if "outcomes" in json.loads(raw)]
+    if _USE_PG:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT fixture_id, data FROM predictions "
+                    "WHERE data::jsonb ? 'outcomes'"
+                )
+                rows = cur.fetchall()
+    else:
+        with _get_conn() as conn:
+            try:
+                rows = conn.execute(
+                    "SELECT fixture_id, data FROM predictions "
+                    "WHERE json_extract(data, '$.outcomes') IS NOT NULL"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                all_rows = conn.execute(
+                    "SELECT fixture_id, data FROM predictions"
+                ).fetchall()
+                rows = [(fid, raw) for fid, raw in all_rows
+                        if "outcomes" in json.loads(raw)]
     out = []
     for fid, raw in rows:
         entry = json.loads(raw)
