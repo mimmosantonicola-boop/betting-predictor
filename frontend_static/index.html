@@ -44,6 +44,7 @@
     .badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:10px;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
     .badge.sa{background:#1a2f1a;color:#3fb950;border:1px solid #238636}
     .badge.cl{background:#1a2340;color:#79c0ff;border:1px solid #1f6feb}
+    .badge.ecl{background:#1a1a2f;color:#b388ff;border:1px solid #6a3fbf}
     .badge.wc,.badge.wcqe,.badge.wcqa,.badge.wcqc,.badge.wcqas,.badge.wcqaf{background:#2a1a10;color:#f0a050;border:1px solid #a0622a}
     .badge.green{background:#1a2f1a;color:#3fb950}
     .badge.yellow{background:#2a2510;color:#e3b341;display:flex;align-items:center;gap:4px}
@@ -489,6 +490,7 @@ createApp({
       {code:'ALL',   label:'All'},
       {code:'SA',    label:'🇮🇹 Serie A'},
       {code:'CL',    label:'⭐ UCL'},
+      {code:'ECL',   label:'🟣 UECL'},
       {code:'WC',    label:'🌍 World Cup'},
       {code:'WCQE',  label:'🏆 WCQ Europe'},
       {code:'WCQA',  label:'🏆 WCQ Americas'},
@@ -497,7 +499,7 @@ createApp({
       {code:'WCQAF', label:'🏆 WCQ Africa'},
     ]
     const COMP_LABEL = {
-      SA:'🇮🇹 Serie A', CL:'⭐ UCL', WC:'🌍 World Cup',
+      SA:'🇮🇹 Serie A', CL:'⭐ UCL', ECL:'🟣 UECL', WC:'🌍 World Cup',
       WCQE:'🏆 WCQ Europe', WCQA:'🏆 WCQ Americas',
       WCQC:'🏆 WCQ CONCACAF', WCQAS:'🏆 WCQ Asia', WCQAF:'🏆 WCQ Africa',
     }
@@ -548,7 +550,7 @@ createApp({
     }
 
     async function loadAllOdds() {
-      for (const code of ['SA','CL','WC','WCQE','WCQA','WCQC','WCQAS','WCQAF']) {
+      for (const code of ['SA','CL','ECL','WC','WCQE','WCQA','WCQC','WCQAS','WCQAF']) {
         try {
           const r = await fetch(`${API}/odds/${code}`)
           if (!r.ok) continue
