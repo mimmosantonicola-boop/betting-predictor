@@ -27,6 +27,7 @@ from football.models import TeamStats, InjuryReport
 from seed import build_seed_document
 from predictor.mirofish_client import MiroFishClient
 from predictor.result_parser import ResultParser, BettingPrediction
+from predictor.poisson import compute_poisson
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -76,10 +77,28 @@ class BettingOrchestrator:
         if result["status"] != "success":
             raise RuntimeError(f"MiroFish pipeline failed: {result.get('error')}")
 
-        # 4. Parse predictions
+        # 4. Parse LLM predictions
         prediction = self.parser.parse(result["report_markdown"])
         prediction.match = match_label
         prediction.competition = fixture.competition
+
+        # 5. Override scoreline with Poisson model (more reliable than LLM guess)
+        try:
+            poisson = compute_poisson(
+                report.home_stats,
+                report.away_stats,
+                fixture.competition_code,
+            )
+            prediction.most_likely_scoreline = poisson.most_likely_scoreline
+            prediction.poisson_lambda_home   = poisson.lambda_home
+            prediction.poisson_lambda_away   = poisson.lambda_away
+            prediction.poisson_top_scorelines = poisson.top_scorelines(8)
+            logger.info(
+                "Poisson: λ_home=%.2f λ_away=%.2f → %s",
+                poisson.lambda_home, poisson.lambda_away, poisson.most_likely_scoreline,
+            )
+        except Exception as e:
+            logger.warning("Poisson model failed (non-fatal): %s", e)
 
         logger.info("Prediction complete: %s", json.dumps(prediction.to_dict(), indent=2))
         return prediction

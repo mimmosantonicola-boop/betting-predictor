@@ -14,7 +14,7 @@ import json
 import re
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,11 @@ class BettingPrediction:
     # Scoreline
     most_likely_scoreline: str = ""
     confidence: str = "medium"
+
+    # Poisson model output (computed post-LLM)
+    poisson_lambda_home: float = 0.0
+    poisson_lambda_away: float = 0.0
+    poisson_top_scorelines: List = field(default_factory=list)  # [["1-0", 18.2], ...]
 
     # Meta
     raw_report: str = ""

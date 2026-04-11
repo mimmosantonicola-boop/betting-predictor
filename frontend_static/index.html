@@ -286,6 +286,18 @@
         <div v-if="p.most_likely_scoreline" class="scoreline">
           <span class="dim">Scoreline:</span>
           <span class="scoreline-val">{{ p.most_likely_scoreline }}</span>
+          <span v-if="p.poisson_lambda_home" class="dim" style="font-size:.72rem;margin-left:auto">
+            λ {{ p.poisson_lambda_home }} / {{ p.poisson_lambda_away }}
+          </span>
+        </div>
+        <div v-if="p.poisson_top_scorelines&&p.poisson_top_scorelines.length" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px">
+          <div v-for="([score, pct]) in p.poisson_top_scorelines.slice(0,6)" :key="score"
+               :style="{background: score===p.most_likely_scoreline ? '#1f3a1f' : '#161b22',
+                        border: '1px solid ' + (score===p.most_likely_scoreline ? '#238636' : '#21262d'),
+                        borderRadius:'6px', padding:'4px 8px', textAlign:'center', minWidth:'56px'}">
+            <div style="font-size:.82rem;font-weight:700;color:#e6edf3">{{ score }}</div>
+            <div style="font-size:.68rem;color:#8b949e">{{ pct }}%</div>
+          </div>
         </div>
         <div v-if="p.live_odds&&p.live_odds.consensus" class="pred-odds">
           <span class="dim">Live odds:</span>
@@ -349,10 +361,11 @@
         </thead>
         <tbody>
           <template v-for="(stat, mkt) in edgeData" :key="mkt">
-            <tr v-if="stat.sample_size > 0">
+            <tr :style="stat.sample_size === 0 ? 'opacity:0.45' : ''">
               <td style="text-align:left">
                 {{ mktLabel(mkt) }}
                 <span v-if="stat.edge !== null && stat.edge > 0" class="badge value" style="margin-left:6px;font-size:.65rem">⚡ +{{ stat.edge }}%</span>
+                <span v-if="stat.sample_size === 0" style="color:#484f58;font-size:.68rem;margin-left:6px">no data</span>
               </td>
               <td>{{ stat.implied_pct !== null ? stat.implied_pct + '%' : '—' }}</td>
               <td>{{ stat.actual_pct !== null ? stat.actual_pct + '%' : '—' }}</td>
@@ -440,6 +453,21 @@
             <span class="dim">Scoreline:</span>
             <span class="scoreline-val">{{ activePred.most_likely_scoreline }}</span>
             <span :class="['confidence', activePred.confidence]">{{ activePred.confidence }}</span>
+            <span v-if="activePred.poisson_lambda_home" class="dim" style="font-size:.72rem;margin-left:auto">
+              λ {{ activePred.poisson_lambda_home }} / {{ activePred.poisson_lambda_away }}
+            </span>
+          </div>
+          <div v-if="activePred.poisson_top_scorelines&&activePred.poisson_top_scorelines.length" style="margin-top:10px">
+            <div style="font-size:.72rem;color:#6e7681;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Score probabilities (Poisson)</div>
+            <div style="display:flex;flex-wrap:wrap;gap:5px">
+              <div v-for="([score, pct]) in activePred.poisson_top_scorelines" :key="score"
+                   :style="{background: score===activePred.most_likely_scoreline ? '#1f3a1f' : '#161b22',
+                            border: '1px solid ' + (score===activePred.most_likely_scoreline ? '#238636' : '#21262d'),
+                            borderRadius:'6px', padding:'5px 10px', textAlign:'center', minWidth:'62px'}">
+                <div style="font-size:.88rem;font-weight:700;color:#e6edf3">{{ score }}</div>
+                <div style="font-size:.72rem;color:#8b949e">{{ pct }}%</div>
+              </div>
+            </div>
           </div>
         </div>
         <div v-else class="cta">

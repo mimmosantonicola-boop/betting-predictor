@@ -45,7 +45,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from football import FootballDataClient, ApiFootballClient
+from football import FootballDataClient, ApiFootballClient, FBrefScraper
 from data.odds_api import OddsAPIClient
 from data.news_fetcher import NewsFetcher
 from data.cache import get_cache, TTL
@@ -65,6 +65,7 @@ CORS(app, origins="*")
 _orchestrator: BettingOrchestrator | None = None
 _fd_client: FootballDataClient | None = None
 _af_client: ApiFootballClient | None = None
+_fbref_client: FBrefScraper | None = None
 _odds_client: OddsAPIClient | None = None
 _news_fetcher: NewsFetcher | None = None
 _cache = get_cache()
@@ -94,6 +95,13 @@ def get_af() -> ApiFootballClient:
     if _af_client is None:
         _af_client = ApiFootballClient()
     return _af_client
+
+
+def get_fbref() -> FBrefScraper:
+    global _fbref_client
+    if _fbref_client is None:
+        _fbref_client = FBrefScraper()
+    return _fbref_client
 
 
 def get_odds() -> OddsAPIClient:
@@ -266,10 +274,13 @@ def _load_resolved_preds() -> list[dict]:
 
 # ── Outcome helpers ────────────────────────────────────────────────────────────────────
 
-def _compute_outcomes(hs: int, as_: int) -> dict:
-    """Determine which betting markets hit based on final score."""
+def _compute_outcomes(hs: int, as_: int, corners: dict | None = None) -> dict:
+    """
+    Determine which betting markets hit based on final score.
+    Pass corners={"home": N, "away": N} to also resolve corner markets.
+    """
     total = hs + as_
-    return {
+    outcomes = {
         "home_win":  hs > as_,
         "draw":      hs == as_,
         "away_win":  hs < as_,
@@ -279,8 +290,12 @@ def _compute_outcomes(hs: int, as_: int) -> dict:
         "under_3_5": total <= 3,
         "btts_yes":  hs > 0 and as_ > 0,
         "btts_no":   hs == 0 or as_ == 0,
-        # corners and cards not trackable on free API tier
     }
+    if corners and "home" in corners and "away" in corners:
+        total_corners = corners["home"] + corners["away"]
+        outcomes["over_9_5_corners"]  = total_corners > 9
+        outcomes["under_9_5_corners"] = total_corners <= 9
+    return outcomes
 
 
 # Maps market key → consensus odds field name in live_odds.consensus
@@ -557,7 +572,8 @@ def list_predictions():
 @app.route("/api/results/sync", methods=["POST"])
 def results_sync():
     """
-    Fetch final scores for all unresolved predictions and record outcomes.
+    Fetch final scores (and corner counts if API_FOOTBALL_KEY is set)
+    for all unresolved predictions and record outcomes.
     Idempotent — already-resolved predictions are skipped.
     """
     preds = _load_preds()
@@ -588,14 +604,35 @@ def results_sync():
             skipped += 1
             continue
 
-        outcomes = _compute_outcomes(hs, as_)
+        # ── Corner stats via FBref scraping (no API key needed) ─────────────
+        corners: dict = {}
+        try:
+            comp_code = getattr(fixture, "competition_code", "") or ""
+            date_str  = fixture.match_date.strftime("%Y-%m-%d")
+            corners = get_fbref().get_match_corners(
+                comp_code,
+                fixture.home_team,
+                fixture.away_team,
+                date_str,
+            )
+        except Exception as e:
+            logger.debug("FBref corner fetch skipped for %d: %s", fid, e)
+
+        outcomes = _compute_outcomes(hs, as_, corners or None)
         patch = {
             "actual_score": {"home": hs, "away": as_},
             "outcomes": outcomes,
             "result_fetched_at": datetime.now(timezone.utc).isoformat(),
         }
+        if corners:
+            patch["corner_stats"] = corners  # store raw counts for reference
+
         _update_pred_data(fid, patch)
-        updated.append({"fixture_id": fid, "score": f"{hs}-{as_}"})
+        updated.append({
+            "fixture_id": fid,
+            "score": f"{hs}-{as_}",
+            "corners": f"{corners.get('home','?')}-{corners.get('away','?')}" if corners else None,
+        })
 
     return jsonify({
         "updated": updated,

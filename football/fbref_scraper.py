@@ -272,6 +272,134 @@ class FBrefScraper:
 
         return corners
 
+    # ── Per-match corner counts ───────────────────────────────────────────────
+
+    def get_match_corners(
+        self,
+        competition_code: str,
+        home_team: str,
+        away_team: str,
+        date_str: str = "",
+    ) -> dict[str, int]:
+        """
+        Scrape the FBref match report for a specific fixture to get actual corner counts.
+
+        Strategy:
+          1. Scrape the competition schedule page to find the match report URL.
+          2. Scrape the match report page and parse corner kicks from team_stats_extra.
+
+        Returns {"home": int, "away": int} or {} if not found / parsing fails.
+        Uses 1–2 HTTP requests; respects the 4 s polite delay.
+        """
+        match_url = self._find_match_url(competition_code, home_team, away_team, date_str)
+        if not match_url:
+            logger.debug("FBref: no match URL found for %s vs %s", home_team, away_team)
+            return {}
+        return self._scrape_corners_from_report(match_url, home_team, away_team)
+
+    def _find_match_url(
+        self,
+        competition_code: str,
+        home_team: str,
+        away_team: str,
+        date_str: str = "",
+    ) -> Optional[str]:
+        """Return the FBref match report URL for the given fixture, or None."""
+        comp = FBREF_COMPETITIONS.get(competition_code)
+        if not comp:
+            return None
+
+        url = (
+            f"https://fbref.com/en/comps/{comp['id']}/"
+            f"schedule/{comp['slug']}-Scores-and-Fixtures"
+        )
+        soup = _get(url)
+        if not soup:
+            return None
+
+        table = soup.find("table", id=re.compile(r"sched_"))
+        if not table:
+            return None
+
+        home_kw = self._name_keywords(home_team)
+        away_kw = self._name_keywords(away_team)
+
+        for row in table.find_all("tr"):
+            # Optional date pre-filter
+            if date_str:
+                date_cell = row.find("td", {"data-stat": "date"})
+                if date_cell and date_str not in date_cell.get_text(strip=True):
+                    continue
+
+            home_cell  = row.find("td", {"data-stat": "home_team"})
+            away_cell  = row.find("td", {"data-stat": "away_team"})
+            score_cell = row.find("td", {"data-stat": "score"})
+
+            if not all([home_cell, away_cell, score_cell]):
+                continue
+
+            h_kw = self._name_keywords(home_cell.get_text(strip=True))
+            a_kw = self._name_keywords(away_cell.get_text(strip=True))
+
+            if (home_kw & h_kw) and (away_kw & a_kw):
+                link = score_cell.find("a")
+                if link and link.get("href"):
+                    href = link["href"]
+                    if not href.startswith("http"):
+                        href = "https://fbref.com" + href
+                    return href
+
+        return None
+
+    def _scrape_corners_from_report(
+        self, match_url: str, home_team: str = "", away_team: str = ""
+    ) -> dict[str, int]:
+        """
+        Parse corner kicks from a FBref match report page.
+        Tries team_stats_extra (preferred) then falls back to team_stats table.
+        """
+        soup = _get(match_url)
+        if not soup:
+            return {}
+
+        # ── Approach 1: div#team_stats_extra ─────────────────────────────────
+        # Structure: each <div> child has <p> label, <p> home_val, <p> away_val
+        extra = soup.find("div", id="team_stats_extra")
+        if extra:
+            child_divs = extra.find_all("div", recursive=False)
+            for div in child_divs:
+                paras = div.find_all("p")
+                if not paras:
+                    continue
+                label = paras[0].get_text(strip=True).lower()
+                if "corner" in label and len(paras) >= 3:
+                    try:
+                        return {
+                            "home": int(paras[1].get_text(strip=True)),
+                            "away": int(paras[2].get_text(strip=True)),
+                        }
+                    except ValueError:
+                        pass
+
+        # ── Approach 2: div#team_stats table rows ────────────────────────────
+        team_stats = soup.find("div", id="team_stats")
+        if team_stats:
+            for tr in team_stats.find_all("tr"):
+                if "corner" not in tr.get_text().lower():
+                    continue
+                nums = []
+                for td in tr.find_all("td"):
+                    txt = td.get_text(strip=True).split("\n")[0].strip()
+                    try:
+                        nums.append(int(txt))
+                    except ValueError:
+                        continue
+                if len(nums) >= 2:
+                    return {"home": nums[0], "away": nums[1]}
+
+        logger.debug("FBref: corners not found in match report %s", match_url)
+        return {}
+
     # ── BTTS & clean sheets (from schedule page) ──────────────────────────────
 
     def get_btts_and_clean_sheets(self, competition_code: str) -> dict[str, dict]:
