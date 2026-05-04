@@ -31,11 +31,26 @@ LEAGUE_AVG_XG: dict[str, float] = {
 }
 _DEFAULT_AVG_XG = 1.30
 
-# Home teams score ~10% more than at a neutral venue
-HOME_ADVANTAGE = 1.10
+# Per-competition home advantage (home attack multiplier).
+# Derived from historical home/away goals ratios per competition.
+HOME_ADVANTAGE: dict[str, float] = {
+    "SA":    1.12,   # Serie A: strong crowd factor
+    "CL":    1.06,   # CL: competitive away sides, historically flatter
+    "ECL":   1.10,
+    "WC":    1.05,   # Often semi-neutral venues
+    "WCQE":  1.12,
+    "WCQA":  1.15,   # South America: very strong home factor
+    "WCQC":  1.10,
+    "WCQAS": 1.08,
+    "WCQAF": 1.12,
+}
+_DEFAULT_HOME_ADVANTAGE = 1.10
 
 # Compute grid up to MAX_GOALS × MAX_GOALS
 MAX_GOALS = 6
+
+# Dixon-Coles ρ — correction for joint low-score outcomes (D&C 1997)
+_DC_RHO = -0.13
 
 
 # ── Core math ──────────────────────────────────────────────────────────────────
@@ -45,6 +60,23 @@ def _poisson_pmf(k: int, lam: float) -> float:
     if lam <= 0:
         return 1.0 if k == 0 else 0.0
     return math.exp(-lam) * (lam ** k) / math.factorial(k)
+
+
+def _dixon_coles_tau(h: int, a: int, lh: float, la: float, rho: float) -> float:
+    """
+    Correction factor τ for the (h, a) joint outcome.
+    Only adjusts the four low-score cells: (0,0), (1,0), (0,1), (1,1).
+    All other scorelines return 1.0 (unchanged).
+    """
+    if h == 0 and a == 0:
+        return 1.0 - lh * la * rho
+    if h == 1 and a == 0:
+        return 1.0 + la * rho
+    if h == 0 and a == 1:
+        return 1.0 + lh * rho
+    if h == 1 and a == 1:
+        return 1.0 - rho
+    return 1.0
 
 
 # ── Result container ───────────────────────────────────────────────────────────
@@ -169,18 +201,26 @@ def compute_poisson(
     home_def = best(home_stats.xga_pg, home_stats.goals_conceded_pg)
     away_def = best(away_stats.xga_pg, away_stats.goals_conceded_pg)
 
-    lambda_home = (home_att / avg) * (away_def / avg) * avg * HOME_ADVANTAGE
+    ha = HOME_ADVANTAGE.get(competition_code, _DEFAULT_HOME_ADVANTAGE)
+    lambda_home = (home_att / avg) * (away_def / avg) * avg * ha
     lambda_away = (away_att / avg) * (home_def / avg) * avg
 
     # Clamp to realistic range
     lambda_home = max(0.20, min(lambda_home, 5.0))
     lambda_away = max(0.20, min(lambda_away, 5.0))
 
+    # Raw independent Poisson grid
     grid = [
         [_poisson_pmf(h, lambda_home) * _poisson_pmf(a, lambda_away)
+         * _dixon_coles_tau(h, a, lambda_home, lambda_away, _DC_RHO)
          for a in range(MAX_GOALS + 1)]
         for h in range(MAX_GOALS + 1)
     ]
+
+    # Renormalize so probabilities sum to 1 (DC correction perturbs the total)
+    total = sum(p for row in grid for p in row)
+    if total > 0:
+        grid = [[p / total for p in row] for row in grid]
 
     return PoissonResult(
         lambda_home=round(lambda_home, 2),
@@ -244,4 +284,75 @@ def compute_corner_poisson(
         lambda_corners=round(lambda_total, 2),
         over_9_5_corners_pct=round(over_9_5 * 100, 1),
         under_9_5_corners_pct=round(under_9_5 * 100, 1),
+    )
+
+
+# ── Cards model ────────────────────────────────────────────────────────────────
+
+# Empirical average total yellow cards per game, per competition
+LEAGUE_AVG_CARDS: dict[str, dict[str, float]] = {
+    "SA":    {"yellow": 4.4, "red": 0.16},
+    "CL":    {"yellow": 3.6, "red": 0.12},
+    "ECL":   {"yellow": 4.0, "red": 0.14},
+    "WC":    {"yellow": 4.0, "red": 0.16},
+    "WCQE":  {"yellow": 4.6, "red": 0.18},
+    "WCQA":  {"yellow": 4.8, "red": 0.20},
+    "WCQC":  {"yellow": 4.6, "red": 0.18},
+    "WCQAS": {"yellow": 4.4, "red": 0.16},
+    "WCQAF": {"yellow": 5.0, "red": 0.20},
+}
+_DEFAULT_AVG_CARDS = {"yellow": 4.4, "red": 0.16}
+
+
+@dataclass
+class CardsResult:
+    lambda_yellow: float
+    lambda_red: float
+    over_3_5_yellow_pct: float
+    under_3_5_yellow_pct: float
+    over_4_5_yellow_pct: float
+    under_4_5_yellow_pct: float
+
+
+def compute_cards_poisson(
+    home_yellow_pg: float,
+    away_yellow_pg: float,
+    home_red_pg: float,
+    away_red_pg: float,
+    competition_code: str = "",
+) -> CardsResult | None:
+    """
+    Estimate card markets using independent Poisson models.
+
+    λ_yellow = home_yellow_pg + away_yellow_pg (falls back to league avg half each)
+    λ_red    = home_red_pg + away_red_pg
+
+    Returns None if no usable data is available.
+    """
+    if home_yellow_pg <= 0 and away_yellow_pg <= 0:
+        return None
+
+    avgs = LEAGUE_AVG_CARDS.get(competition_code, _DEFAULT_AVG_CARDS)
+
+    hy = home_yellow_pg if home_yellow_pg > 0 else avgs["yellow"] / 2
+    ay = away_yellow_pg if away_yellow_pg > 0 else avgs["yellow"] / 2
+    hr = home_red_pg if home_red_pg > 0 else avgs["red"] / 2
+    ar = away_red_pg if away_red_pg > 0 else avgs["red"] / 2
+
+    lambda_yellow = max(0.5, hy + ay)
+    lambda_red    = max(0.01, hr + ar)
+
+    under_3_5_y = sum(_poisson_pmf(k, lambda_yellow) for k in range(4))
+    over_3_5_y  = 1.0 - under_3_5_y
+
+    under_4_5_y = sum(_poisson_pmf(k, lambda_yellow) for k in range(5))
+    over_4_5_y  = 1.0 - under_4_5_y
+
+    return CardsResult(
+        lambda_yellow=round(lambda_yellow, 2),
+        lambda_red=round(lambda_red, 2),
+        over_3_5_yellow_pct=round(over_3_5_y * 100, 1),
+        under_3_5_yellow_pct=round(under_3_5_y * 100, 1),
+        over_4_5_yellow_pct=round(over_4_5_y * 100, 1),
+        under_4_5_yellow_pct=round(under_4_5_y * 100, 1),
     )
