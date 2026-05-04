@@ -15,7 +15,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from football.models import TeamStats
+from football.models import TeamStats, HeadToHead
 
 # Empirical average xG per team per game, per competition
 LEAGUE_AVG_XG: dict[str, float] = {
@@ -77,6 +77,28 @@ def _dixon_coles_tau(h: int, a: int, lh: float, la: float, rho: float) -> float:
     if h == 1 and a == 1:
         return 1.0 - rho
     return 1.0
+
+
+def _h2h_factors(h2h: HeadToHead | None) -> tuple[float, float]:
+    """
+    Compute (home_factor, away_factor) from head-to-head history.
+    Each factor multiplies the respective lambda.
+    Uses a maximum ±10% adjustment, shrunk by sample size.
+    Returns (1.0, 1.0) when H2H is unavailable or has fewer than 3 meetings.
+    """
+    if h2h is None or h2h.total_meetings < 3:
+        return 1.0, 1.0
+    n = h2h.total_meetings
+    home_rate = h2h.home_wins / n
+    away_rate = h2h.away_wins / n
+    # Weight: reaches full strength at 10 meetings, caps at 10%
+    w = min(n / 10, 1.0) * 0.10
+    home_f = round(1.0 + (home_rate - 0.45) * w / 0.45, 4)
+    away_f = round(1.0 + (away_rate - 0.45) * w / 0.45, 4)
+    # Clamp to ±10%
+    home_f = max(0.90, min(home_f, 1.10))
+    away_f = max(0.90, min(away_f, 1.10))
+    return home_f, away_f
 
 
 # ── Result container ───────────────────────────────────────────────────────────
@@ -181,6 +203,8 @@ def compute_poisson(
     home_stats: TeamStats,
     away_stats: TeamStats,
     competition_code: str = "",
+    head_to_head: HeadToHead | None = None,
+    is_neutral: bool = False,
 ) -> PoissonResult:
     """
     Compute the Poisson scoreline probability grid.
@@ -190,6 +214,8 @@ def compute_poisson(
       λ_away = (away_attack / avg) × (home_defense / avg) × avg
 
     Falls back from xG → goals_scored if xG data is unavailable.
+    H2H history applies a ±10% max adjustment to both lambdas.
+    is_neutral=True forces home_advantage=1.0 (WC, final-stage matches).
     """
     avg = LEAGUE_AVG_XG.get(competition_code, _DEFAULT_AVG_XG)
 
@@ -201,9 +227,14 @@ def compute_poisson(
     home_def = best(home_stats.xga_pg, home_stats.goals_conceded_pg)
     away_def = best(away_stats.xga_pg, away_stats.goals_conceded_pg)
 
-    ha = HOME_ADVANTAGE.get(competition_code, _DEFAULT_HOME_ADVANTAGE)
+    ha = 1.0 if is_neutral else HOME_ADVANTAGE.get(competition_code, _DEFAULT_HOME_ADVANTAGE)
     lambda_home = (home_att / avg) * (away_def / avg) * avg * ha
     lambda_away = (away_att / avg) * (home_def / avg) * avg
+
+    # H2H adjustment (±10% max, shrunk toward 1.0 for small samples)
+    h2h_home_f, h2h_away_f = _h2h_factors(head_to_head)
+    lambda_home *= h2h_home_f
+    lambda_away *= h2h_away_f
 
     # Clamp to realistic range
     lambda_home = max(0.20, min(lambda_home, 5.0))
@@ -320,12 +351,13 @@ def compute_cards_poisson(
     home_red_pg: float,
     away_red_pg: float,
     competition_code: str = "",
+    referee_factor: float = 1.0,
 ) -> CardsResult | None:
     """
     Estimate card markets using independent Poisson models.
 
-    λ_yellow = home_yellow_pg + away_yellow_pg (falls back to league avg half each)
-    λ_red    = home_red_pg + away_red_pg
+    λ_yellow = (home_yellow_pg + away_yellow_pg) × referee_factor
+    referee_factor = ref_yellow_pg / league_avg_yellow_pg (1.0 if unknown).
 
     Returns None if no usable data is available.
     """
@@ -339,7 +371,8 @@ def compute_cards_poisson(
     hr = home_red_pg if home_red_pg > 0 else avgs["red"] / 2
     ar = away_red_pg if away_red_pg > 0 else avgs["red"] / 2
 
-    lambda_yellow = max(0.5, hy + ay)
+    referee_factor = max(0.5, min(referee_factor, 2.0))  # clamp to realistic range
+    lambda_yellow = max(0.5, (hy + ay) * referee_factor)
     lambda_red    = max(0.01, hr + ar)
 
     under_3_5_y = sum(_poisson_pmf(k, lambda_yellow) for k in range(4))
