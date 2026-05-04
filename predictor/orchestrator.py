@@ -27,7 +27,8 @@ from football.models import TeamStats, InjuryReport
 from seed import build_seed_document
 from predictor.mirofish_client import MiroFishClient
 from predictor.result_parser import ResultParser, BettingPrediction
-from predictor.poisson import compute_poisson, compute_corner_poisson
+from predictor.poisson import compute_poisson, compute_corner_poisson, compute_cards_poisson
+from predictor.shrinkage import apply_shrinkage
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -57,6 +58,10 @@ class BettingOrchestrator:
 
         # 1. Gather all data
         report = self._build_match_report(fixture)
+
+        # 1b. Apply Bayesian shrinkage (pulls early-season noise toward league avg)
+        apply_shrinkage(report.home_stats, fixture.competition_code)
+        apply_shrinkage(report.away_stats, fixture.competition_code)
 
         # 2. Generate seed document
         seed_text, pred_prompt = build_seed_document(report)
