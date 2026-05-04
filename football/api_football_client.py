@@ -180,6 +180,13 @@ class ApiFootballClient:
 
                 round_str = entry.get("league", {}).get("round", "")
 
+                # WC matches are always at neutral venues (host country)
+                is_neutral = competition_code == "WC"
+                referee = fix.get("referee") or None
+                # API-Football sometimes returns "Referee Name, Country"
+                if referee and "," in referee:
+                    referee = referee.split(",")[0].strip()
+
                 fixtures.append(Fixture(
                     fixture_id=fix["id"],
                     competition=comp_name,
@@ -193,6 +200,8 @@ class ApiFootballClient:
                     home_score=goals.get("home"),
                     away_score=goals.get("away"),
                     stage=round_str or None,
+                    referee=referee,
+                    is_neutral=is_neutral,
                 ))
             except (KeyError, ValueError) as e:
                 logger.debug("Skip malformed API-Football fixture: %s", e)
