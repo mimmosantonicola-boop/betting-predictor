@@ -318,6 +318,18 @@ _COUNTERPART: dict[str, str] = {
     "over_3_5_cards":     "under_3_5_cards",   "under_3_5_cards":   "over_3_5_cards",
 }
 
+MIN_EDGE_PCT = 3.0
+
+_MARKET_LABELS: dict[str, str] = {
+    "home_win": "Home Win", "draw": "Draw", "away_win": "Away Win",
+    "over_2_5": "Over 2.5", "under_2_5": "Under 2.5",
+    "over_3_5": "Over 3.5", "under_3_5": "Under 3.5",
+    "btts_yes": "BTTS Yes", "btts_no": "BTTS No",
+    "over_9_5_corners": "Corners +9.5", "under_9_5_corners": "Corners -9.5",
+    "over_3_5_cards": "Cards +3.5", "under_3_5_cards": "Cards -3.5",
+    "red_card": "Red Card",
+}
+
 
 def _implied_pct(market_key: str, consensus: dict, ai_pct: float) -> float:
     """
@@ -641,6 +653,70 @@ def results_sync():
     })
 
 
+@app.route("/api/value-bets")
+def value_bets():
+    """
+    Returns upcoming (unresolved) predictions with at least one market where
+    model_pct - implied_pct >= MIN_EDGE_PCT (odds-backed markets only).
+    Sorted by best edge descending.
+    """
+    preds = _load_preds()
+
+    # Only markets where we can compare against real odds
+    VALUE_MARKETS = {
+        "home_win":  "home_win_pct",
+        "draw":      "draw_pct",
+        "away_win":  "away_win_pct",
+        "over_2_5":  "over_2_5_pct",
+        "under_2_5": "under_2_5_pct",
+        "btts_yes":  "btts_yes_pct",
+        "btts_no":   "btts_no_pct",
+    }
+
+    results = []
+    for p in preds:
+        if p.get("result_fetched_at"):
+            continue
+        consensus = p.get("live_odds", {}).get("consensus", {})
+        if not consensus:
+            continue
+
+        bets = []
+        for mkt_key, pred_field in VALUE_MARKETS.items():
+            model_pct = p.get(pred_field, 0.0)
+            if not model_pct:
+                continue
+            odds_key = _ODDS_KEY_MAP.get(mkt_key)
+            if not odds_key:
+                continue
+            price = consensus.get(odds_key, 0)
+            if not price or price <= 1.0:
+                continue
+            implied = _implied_pct(mkt_key, consensus, model_pct)
+            edge = round(model_pct - implied, 1)
+            if edge >= MIN_EDGE_PCT:
+                bets.append({
+                    "market_key": mkt_key,
+                    "market":     _MARKET_LABELS.get(mkt_key, mkt_key),
+                    "model_pct":  round(model_pct, 1),
+                    "implied_pct": implied,
+                    "edge":       edge,
+                    "odds":       price,
+                })
+
+        if bets:
+            bets.sort(key=lambda x: x["edge"], reverse=True)
+            results.append({
+                "fixture_id":  p["fixture_id"],
+                "match_label": p.get("match_label", ""),
+                "competition": p.get("competition", ""),
+                "bets":        bets,
+            })
+
+    results.sort(key=lambda x: max(b["edge"] for b in x["bets"]), reverse=True)
+    return jsonify(results)
+
+
 @app.route("/api/edge")
 def edge_stats():
     """
@@ -689,15 +765,34 @@ def edge_stats():
             result[mkt_key] = {
                 "implied_pct": None, "actual_pct": None,
                 "edge": None, "sample_size": 0,
+                "calibration_buckets": [],
             }
             continue
         avg_implied = round(sum(x[0] for x in data_points) / n, 1)
         actual = round(sum(1 for _, hit in data_points if hit) / n * 100, 1)
+
+        # Calibration: group into 10% buckets by implied_pct
+        from collections import defaultdict as _dd
+        buckets: dict[int, list[tuple[float, bool]]] = _dd(list)
+        for imp, hit in data_points:
+            lo = min(int(imp // 10) * 10, 90)
+            buckets[lo].append((imp, hit))
+        cal_buckets = []
+        for lo in sorted(buckets):
+            pts = buckets[lo]
+            cal_buckets.append({
+                "range":      f"{lo}-{lo+10}%",
+                "pred_avg":   round(sum(x[0] for x in pts) / len(pts), 1),
+                "actual_pct": round(sum(1 for _, h in pts if h) / len(pts) * 100, 1),
+                "n":          len(pts),
+            })
+
         result[mkt_key] = {
             "implied_pct": avg_implied,
             "actual_pct":  actual,
             "edge":        round(actual - avg_implied, 1),
             "sample_size": n,
+            "calibration_buckets": cal_buckets,
         }
 
     return jsonify(result)
