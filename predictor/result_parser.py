@@ -56,6 +56,7 @@ class BettingPrediction:
     poisson_lambda_home: float = 0.0
     poisson_lambda_away: float = 0.0
     poisson_top_scorelines: List = field(default_factory=list)  # [["1-0", 18.2], ...]
+    poisson_corners_lambda: float = 0.0
 
     # Meta
     raw_report: str = ""

@@ -1,9 +1,11 @@
 """
-predictor/poisson.py — Poisson model for exact scoreline probabilities.
+predictor/poisson.py — Poisson models for scoreline and corner probabilities.
 
 Uses xG data from FBref to estimate expected goals per team,
 then applies independent Poisson distributions to compute the full
 scoreline probability matrix (Dixon-Coles style attack/defense adjustment).
+
+Also provides a corner model: total corners ~ Poisson(home_cpg + away_cpg).
 
 No external dependencies beyond the standard library.
 """
@@ -184,4 +186,62 @@ def compute_poisson(
         lambda_home=round(lambda_home, 2),
         lambda_away=round(lambda_away, 2),
         grid=grid,
+    )
+
+
+# ── Corner model ───────────────────────────────────────────────────────────────
+
+# Empirical average total corners per game, per competition
+LEAGUE_AVG_CORNERS: dict[str, float] = {
+    "SA":    10.5,
+    "CL":    10.0,
+    "ECL":    9.5,
+    "WC":     9.0,
+    "WCQE":   9.5,
+    "WCQA":   9.0,
+    "WCQC":   9.0,
+    "WCQAS":  9.0,
+    "WCQAF":  8.5,
+}
+_DEFAULT_AVG_CORNERS = 10.0
+
+@dataclass
+class CornerResult:
+    lambda_corners: float
+    over_9_5_corners_pct: float
+    under_9_5_corners_pct: float
+
+
+def compute_corner_poisson(
+    home_corners_pg: float,
+    away_corners_pg: float,
+    competition_code: str = "",
+) -> CornerResult | None:
+    """
+    Estimate over/under 9.5 corners using a Poisson model on total corners.
+
+    λ = home_corners_pg + away_corners_pg, adjusted toward the league average
+    when per-team data is sparse (either value is zero → fall back to average).
+
+    Returns None if no usable data is available.
+    """
+    if home_corners_pg <= 0 and away_corners_pg <= 0:
+        return None
+
+    avg = LEAGUE_AVG_CORNERS.get(competition_code, _DEFAULT_AVG_CORNERS)
+
+    # If only one side has data, substitute the other with half the league avg
+    h = home_corners_pg if home_corners_pg > 0 else avg / 2
+    a = away_corners_pg if away_corners_pg > 0 else avg / 2
+
+    lambda_total = max(0.5, h + a)
+
+    # P(total corners ≤ 9) = sum_{k=0}^{9} Poisson(k | lambda_total)
+    under_9_5 = sum(_poisson_pmf(k, lambda_total) for k in range(10))
+    over_9_5  = 1.0 - under_9_5
+
+    return CornerResult(
+        lambda_corners=round(lambda_total, 2),
+        over_9_5_corners_pct=round(over_9_5 * 100, 1),
+        under_9_5_corners_pct=round(under_9_5 * 100, 1),
     )

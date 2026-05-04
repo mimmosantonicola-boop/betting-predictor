@@ -421,7 +421,7 @@
 
       <!-- AI Prediction -->
       <div class="section">
-        <div class="sec-title">🤖 AI Prediction</div>
+        <div class="sec-title">🤖 AI + Poisson Prediction</div>
         <div v-if="activePred">
           <div class="bar-group" style="margin-bottom:16px">
             <div class="bar-row">
@@ -679,11 +679,14 @@ createApp({
       return 'cl'
     }
     function mkts(p) {
+      const crnLbl = p.poisson_corners_lambda
+        ? `Corners O/U 9.5 (λ=${p.poisson_corners_lambda})`
+        : 'Corners O/U 9.5'
       return [
         {label:'Goals O/U 2.5', aLbl:'Over', bLbl:'Under', a:p.over_2_5_pct, b:p.under_2_5_pct},
         {label:'Goals O/U 3.5', aLbl:'Over', bLbl:'Under', a:p.over_3_5_pct, b:p.under_3_5_pct},
         {label:'BTTS',           aLbl:'Yes',  bLbl:'No',    a:p.btts_yes_pct, b:p.btts_no_pct},
-        {label:'Corners O/U 9.5',aLbl:'Over', bLbl:'Under', a:p.over_9_5_corners_pct, b:p.under_9_5_corners_pct},
+        {label:crnLbl,           aLbl:'Over', bLbl:'Under', a:p.over_9_5_corners_pct, b:p.under_9_5_corners_pct},
         {label:'Cards O/U 3.5',  aLbl:'Over', bLbl:'Under', a:p.over_3_5_cards_pct, b:p.under_3_5_cards_pct},
         {label:'Red Card',       aLbl:'Yes',  bLbl:'No',    a:p.red_card_pct, b:Math.round((100-p.red_card_pct)*10)/10},
       ]

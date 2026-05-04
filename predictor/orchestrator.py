@@ -27,7 +27,7 @@ from football.models import TeamStats, InjuryReport
 from seed import build_seed_document
 from predictor.mirofish_client import MiroFishClient
 from predictor.result_parser import ResultParser, BettingPrediction
-from predictor.poisson import compute_poisson
+from predictor.poisson import compute_poisson, compute_corner_poisson
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -82,23 +82,54 @@ class BettingOrchestrator:
         prediction.match = match_label
         prediction.competition = fixture.competition
 
-        # 5. Override scoreline with Poisson model (more reliable than LLM guess)
+        # 5. Override predictions with Poisson model (more reliable than LLM)
         try:
             poisson = compute_poisson(
                 report.home_stats,
                 report.away_stats,
                 fixture.competition_code,
             )
-            prediction.most_likely_scoreline = poisson.most_likely_scoreline
-            prediction.poisson_lambda_home   = poisson.lambda_home
-            prediction.poisson_lambda_away   = poisson.lambda_away
+            prediction.most_likely_scoreline  = poisson.most_likely_scoreline
+            prediction.poisson_lambda_home    = poisson.lambda_home
+            prediction.poisson_lambda_away    = poisson.lambda_away
             prediction.poisson_top_scorelines = poisson.top_scorelines(8)
+            # Override goal markets — Poisson is more reliable than LLM
+            prediction.home_win_pct   = poisson.home_win_pct
+            prediction.draw_pct       = poisson.draw_pct
+            prediction.away_win_pct   = poisson.away_win_pct
+            prediction.over_2_5_pct   = poisson.over_2_5_pct
+            prediction.under_2_5_pct  = poisson.under_2_5_pct
+            prediction.over_3_5_pct   = poisson.over_3_5_pct
+            prediction.under_3_5_pct  = poisson.under_3_5_pct
+            prediction.btts_yes_pct   = poisson.btts_yes_pct
+            prediction.btts_no_pct    = poisson.btts_no_pct
             logger.info(
-                "Poisson: λ_home=%.2f λ_away=%.2f → %s",
+                "Poisson goals: λ_home=%.2f λ_away=%.2f → %s "
+                "(1X2: %.1f/%.1f/%.1f, O2.5: %.1f%%, O3.5: %.1f%%, BTTS: %.1f%%)",
                 poisson.lambda_home, poisson.lambda_away, poisson.most_likely_scoreline,
+                poisson.home_win_pct, poisson.draw_pct, poisson.away_win_pct,
+                poisson.over_2_5_pct, poisson.over_3_5_pct, poisson.btts_yes_pct,
             )
         except Exception as e:
-            logger.warning("Poisson model failed (non-fatal): %s", e)
+            logger.warning("Poisson goals model failed (non-fatal): %s", e)
+
+        # 6. Override corner predictions with Poisson model
+        try:
+            corner_poisson = compute_corner_poisson(
+                report.home_stats.corners_pg,
+                report.away_stats.corners_pg,
+                fixture.competition_code,
+            )
+            if corner_poisson:
+                prediction.over_9_5_corners_pct  = corner_poisson.over_9_5_corners_pct
+                prediction.under_9_5_corners_pct = corner_poisson.under_9_5_corners_pct
+                prediction.poisson_corners_lambda = corner_poisson.lambda_corners
+                logger.info(
+                    "Poisson corners: λ=%.2f → O9.5: %.1f%%",
+                    corner_poisson.lambda_corners, corner_poisson.over_9_5_corners_pct,
+                )
+        except Exception as e:
+            logger.warning("Poisson corners model failed (non-fatal): %s", e)
 
         logger.info("Prediction complete: %s", json.dumps(prediction.to_dict(), indent=2))
         return prediction
