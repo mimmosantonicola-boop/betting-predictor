@@ -528,77 +528,104 @@ class BettingOrchestrator:
     @staticmethod
     def _build_summary(fixture: Fixture, report, prediction) -> str:
         """
-        Build a concise analyst-style rationale from model outputs and input data.
-        Pure template logic — no LLM, no extra latency.
-        Sentence order: attacking profile → H2H → model verdict → confidence note.
+        Conversational tipster-style narrative built from model outputs.
+        No technical notation — readable by anyone, not just analysts.
         """
-        from football.models import MatchReport as _MR  # noqa: local import avoids circular
-
-        lines: list[str] = []
-        hs = report.home_stats
+        hs  = report.home_stats
         as_ = report.away_stats
-        lh  = prediction.poisson_lambda_home
-        la  = prediction.poisson_lambda_away
-
-        # ── Sentence 1: Attacking/defensive profile ───────────────────────
-        if lh > 0 and la > 0:
-            def _desc(name: str, stats, lam: float) -> str:
-                bits = [f"λ={lam:.2f}"]
-                if stats.xg_pg > 0:
-                    bits.append(f"xG={stats.xg_pg:.1f}/g")
-                if stats.goals_conceded_pg > 0:
-                    bits.append(f"GA={stats.goals_conceded_pg:.1f}/g")
-                if stats.games_played >= 3:
-                    bits.append(f"{stats.games_played}gp")
-                return f"{name} ({', '.join(bits)})"
-
-            neutral_note = " [neutral venue]" if fixture.is_neutral else ""
-            lines.append(
-                f"{_desc(fixture.home_team, hs, lh)} vs "
-                f"{_desc(fixture.away_team, as_, la)}{neutral_note}."
-            )
-
-        # ── Sentence 2: H2H ───────────────────────────────────────────────
         h2h = report.head_to_head
-        if h2h and h2h.total_meetings >= 1:
-            m = h2h.total_meetings
-            avg_g = f", avg {h2h.avg_goals:.1f} goals" if h2h.avg_goals > 0 else ""
-            lines.append(
-                f"H2H ({m} meetings): {h2h.home_wins}W {h2h.draws}D {h2h.away_wins}L{avg_g}."
-            )
-        else:
-            lines.append("No H2H history in the database.")
-
-        # ── Sentence 3: Model verdict ─────────────────────────────────────
         hw_p = prediction.home_win_pct
         d_p  = prediction.draw_pct
         aw_p = prediction.away_win_pct
         o25  = prediction.over_2_5_pct
         btts = prediction.btts_yes_pct
+        conf = prediction.confidence
 
+        def _attack_desc(goals_pg: float, xg_pg: float) -> str:
+            ref = xg_pg if xg_pg > 0 else goals_pg
+            if ref >= 2.2:   return "a very clinical attack"
+            if ref >= 1.7:   return "a solid attacking threat"
+            if ref >= 1.2:   return "a decent but not overwhelming attack"
+            if ref >= 0.8:   return "a modest attacking output"
+            return "a struggling attack"
+
+        def _defence_desc(ga_pg: float) -> str:
+            if ga_pg == 0:   return ""
+            if ga_pg < 0.8:  return "excellent defensively"
+            if ga_pg < 1.2:  return "solid at the back"
+            if ga_pg < 1.7:  return "occasionally leaky"
+            return "very open at the back"
+
+        parts: list[str] = []
+
+        # ── Sentence 1: Team profiles ─────────────────────────────────────
+        h_atk = _attack_desc(hs.goals_scored_pg, hs.xg_pg)
+        a_atk = _attack_desc(as_.goals_scored_pg, as_.xg_pg)
+        h_def = _defence_desc(hs.goals_conceded_pg)
+        a_def = _defence_desc(as_.goals_conceded_pg)
+
+        neutral_note = " at a neutral venue" if fixture.is_neutral else ""
+        h_desc = f"{h_atk}" + (f" and {h_def}" if h_def else "")
+        a_desc = f"{a_atk}" + (f" and {a_def}" if a_def else "")
+        parts.append(
+            f"{fixture.home_team} come into this{neutral_note} with {h_desc}, "
+            f"while {fixture.away_team} bring {a_desc}."
+        )
+
+        # ── Sentence 2: H2H ───────────────────────────────────────────────
+        if h2h and h2h.total_meetings >= 1:
+            m = h2h.total_meetings
+            hw, d, aw = h2h.home_wins, h2h.draws, h2h.away_wins
+            if hw > aw + 1:
+                h2h_bias = f"history clearly favours {fixture.home_team} ({hw}W-{d}D-{aw}L in {m} meetings)"
+            elif aw > hw + 1:
+                h2h_bias = f"history leans towards {fixture.away_team} ({hw}W-{d}D-{aw}L in {m} meetings)"
+            elif d >= m // 2:
+                h2h_bias = f"these two sides draw a lot — {d} draws in {m} meetings"
+            else:
+                h2h_bias = f"head-to-head is pretty even ({hw}W-{d}D-{aw}L in {m} meetings)"
+            avg_note = f", typically producing around {h2h.avg_goals:.1f} goals" if h2h.avg_goals > 0 else ""
+            parts.append(f"In terms of history, {h2h_bias}{avg_note}.")
+        else:
+            parts.append("There's no head-to-head history available to draw from.")
+
+        # ── Sentence 3: Model verdict ─────────────────────────────────────
         if any((hw_p, d_p, aw_p)):
             dominant = max(hw_p, d_p, aw_p)
             if hw_p >= d_p and hw_p >= aw_p:
-                dom_lbl = f"{fixture.home_team} win"
+                result_line = (
+                    f"The numbers point to a {fixture.home_team} win "
+                    f"({'strong favourite' if dominant >= 60 else 'slight edge'} at {dominant:.0f}%)"
+                )
             elif d_p >= aw_p:
-                dom_lbl = "draw"
+                result_line = (
+                    f"The model sees this as an even contest leaning towards a draw ({dominant:.0f}%)"
+                )
             else:
-                dom_lbl = f"{fixture.away_team} win"
+                result_line = (
+                    f"The numbers actually favour {fixture.away_team} here "
+                    f"({'strong favourite' if dominant >= 60 else 'slight edge'} at {dominant:.0f}%)"
+                )
 
-            extras: list[str] = []
-            if o25 > 0:
-                extras.append(f"O2.5 {o25:.0f}%")
-            if btts > 0:
-                btts_tag = "BTTS yes" if btts >= 50 else "BTTS no"
-                extras.append(f"{btts_tag} ({btts:.0f}%)")
+            goal_notes: list[str] = []
+            if o25 >= 65:
+                goal_notes.append(f"goals look very likely (Over 2.5 at {o25:.0f}%)")
+            elif o25 >= 55:
+                goal_notes.append(f"a higher-scoring game seems probable (Over 2.5 at {o25:.0f}%)")
+            elif o25 > 0 and o25 <= 45:
+                goal_notes.append(f"a tight, low-scoring affair is more likely (Under 2.5 at {100 - o25:.0f}%)")
 
-            verdict = f"Model favours {dom_lbl} ({dominant:.0f}%)"
-            if extras:
-                verdict += f"; {', '.join(extras)}"
-            lines.append(verdict + ".")
+            if btts >= 60:
+                goal_notes.append(f"both teams are likely to score ({btts:.0f}%)")
+            elif btts > 0 and btts <= 40:
+                goal_notes.append(f"at least one side could keep a clean sheet (BTTS only {btts:.0f}%)")
 
-        # ── Sentence 4: Confidence/data note ─────────────────────────────
-        conf = prediction.confidence
+            verdict = result_line
+            if goal_notes:
+                verdict += " — " + " and ".join(goal_notes)
+            parts.append(verdict + ".")
+
+        # ── Sentence 4: Confidence caveat ─────────────────────────────────
         if conf == "low":
             thin = [
                 name for name, st in (
@@ -607,13 +634,16 @@ class BettingOrchestrator:
                 if st.xg_pg == 0.0 or st.games_played < 5
             ]
             if thin:
-                lines.append(f"Low confidence — limited FBref data for {' & '.join(thin)}.")
+                parts.append(
+                    f"Worth noting: data is limited for {' and '.join(thin)}, "
+                    f"so take this one with a pinch of salt."
+                )
             else:
-                lines.append("Low confidence — outcome distribution too uncertain.")
+                parts.append("The outcome is genuinely hard to call — proceed with caution.")
         elif conf == "medium" and (not h2h or h2h.total_meetings == 0):
-            lines.append("Medium confidence — no H2H history to anchor the model.")
+            parts.append("No previous meetings to validate against, so confidence is moderate.")
 
-        return " ".join(lines)
+        return " ".join(parts)
 
     def _referee_factor(self, fixture: Fixture) -> float:
         """
