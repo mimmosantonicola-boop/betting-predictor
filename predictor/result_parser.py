@@ -63,6 +63,9 @@ class BettingPrediction:
     poisson_top_scorelines: List = field(default_factory=list)  # [["1-0", 18.2], ...]
     poisson_corners_lambda: float = 0.0
 
+    # Context
+    motivation_context: str = ""
+
     # Meta
     raw_report: str = ""
     parse_source: str = "json"  # "json" | "text_inference" | "fallback"

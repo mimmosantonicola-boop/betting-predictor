@@ -136,7 +136,9 @@ class BettingOrchestrator:
             prediction.under_3_5_pct  = poisson.under_3_5_pct
             prediction.btts_yes_pct   = poisson.btts_yes_pct
             prediction.btts_no_pct    = poisson.btts_no_pct
-            prediction.confidence     = self._poisson_confidence(poisson)
+            prediction.confidence     = self._poisson_confidence(
+                poisson, report.home_stats, report.away_stats, report.head_to_head
+            )
             logger.info(
                 "Poisson goals: λ_home=%.2f λ_away=%.2f → %s "
                 "(1X2: %.1f/%.1f/%.1f, O2.5: %.1f%%, O3.5: %.1f%%, BTTS: %.1f%%)",
@@ -146,6 +148,13 @@ class BettingOrchestrator:
             )
         except Exception as e:
             logger.warning("Poisson goals model failed (non-fatal): %s", e)
+
+        # ── Motivational context ──────────────────────────────────────────────
+        prediction.motivation_context = self._motivation_context(
+            fixture, report.home_standing, report.away_standing
+        )
+        if prediction.motivation_context:
+            logger.info("Motivation context: %s", prediction.motivation_context)
 
         # ── 6. Poisson corners ────────────────────────────────────────────────
         try:
@@ -420,14 +429,98 @@ class BettingOrchestrator:
             )
 
     @staticmethod
-    def _poisson_confidence(poisson) -> str:
-        """Derive prediction confidence from the dominant outcome probability."""
+    def _poisson_confidence(poisson, home_stats, away_stats, h2h) -> str:
+        """
+        Multi-factor confidence score.
+
+        Factor 1 – Data completeness (max 0.40): awards points for xg_pg, xga_pg,
+          corners_pg being non-zero and for sufficient games_played.
+        Factor 2 – Outcome certainty (max 0.35): maps dominant outcome probability
+          from 33.3% (uniform) to 70%+ linearly.
+        Factor 3 – H2H depth (max 0.25): rewards meaningful head-to-head history.
+
+        Thresholds: ≥0.65 = "high", 0.40–0.65 = "medium", <0.40 = "low".
+        """
+        score = 0.0
+
+        # Factor 1: data completeness
+        data_score = 0.0
+        for stats in (home_stats, away_stats):
+            if getattr(stats, "xg_pg", 0.0) > 0:
+                data_score += 0.05
+            if getattr(stats, "xga_pg", 0.0) > 0:
+                data_score += 0.05
+            if getattr(stats, "corners_pg", 0.0) > 0:
+                data_score += 0.025
+            gp = getattr(stats, "games_played", 0)
+            if gp >= 10:
+                data_score += 0.075
+            elif gp >= 5:
+                data_score += 0.05
+            elif gp >= 3:
+                data_score += 0.025
+        score += min(data_score, 0.40)
+
+        # Factor 2: outcome certainty
         dominant = max(poisson.home_win_pct, poisson.draw_pct, poisson.away_win_pct)
-        if dominant >= 60:
+        certainty = max(0.0, (dominant - 33.3) / (70.0 - 33.3))
+        score += min(certainty * 0.35, 0.35)
+
+        # Factor 3: H2H depth
+        if h2h:
+            meetings = getattr(h2h, "total_meetings", 0)
+            if meetings >= 5:
+                score += 0.25
+            elif meetings >= 3:
+                score += 0.15
+            elif meetings >= 1:
+                score += 0.05
+
+        if score >= 0.65:
             return "high"
-        if dominant >= 45:
+        if score >= 0.40:
             return "medium"
         return "low"
+
+    @staticmethod
+    def _motivation_context(fixture: Fixture, home_standing, away_standing) -> str:
+        """
+        Informational flag derived from standings position and stage.
+        Does not modify lambda — used as display context only.
+        """
+        parts = []
+
+        stage = getattr(fixture, "stage", "") or ""
+        if any(k in stage.lower() for k in ("final", "semi", "quarter", "knockout", "round of")):
+            parts.append(f"Knockout: {stage}")
+
+        if home_standing and away_standing:
+            code = fixture.competition_code
+            is_cup = code in ("CL", "ECL", "WC", "WCQE", "WCQA", "WCQC", "WCQAS", "WCQAF")
+            rel_thr   = 3  if is_cup else 16
+            title_thr = 2  if is_cup else 3
+
+            h_pos, a_pos = home_standing.position, away_standing.position
+
+            if h_pos <= title_thr:
+                parts.append(f"{home_standing.team_name} title race (#{h_pos})")
+            if a_pos <= title_thr:
+                parts.append(f"{away_standing.team_name} title race (#{a_pos})")
+
+            elim_lbl = "elimination zone" if is_cup else "relegation battle"
+            if h_pos >= rel_thr:
+                parts.append(f"{home_standing.team_name} {elim_lbl} (#{h_pos})")
+            if a_pos >= rel_thr:
+                parts.append(f"{away_standing.team_name} {elim_lbl} (#{a_pos})")
+
+            # Possible dead rubber: mid-table, large points gap, no other context
+            if not parts:
+                pts_gap  = abs(home_standing.points - away_standing.points)
+                mid_pos  = (h_pos + a_pos) / 2
+                if pts_gap >= 15 and 5 <= mid_pos <= 14:
+                    parts.append("Low-stakes (large points gap, mid-table)")
+
+        return "; ".join(parts) if parts else ""
 
     def _referee_factor(self, fixture: Fixture) -> float:
         """
