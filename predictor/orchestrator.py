@@ -11,6 +11,7 @@ Can be called:
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 import json
@@ -33,6 +34,11 @@ from predictor.shrinkage import apply_shrinkage
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+# Set USE_LLM=true in the environment to re-enable the LLM call.
+# Default is False: predictions run purely from Poisson + statistical models,
+# which is faster and more reliable for all numeric markets.
+_USE_LLM = os.getenv("USE_LLM", "false").lower() == "true"
+
 
 class BettingOrchestrator:
     """Coordinates the full data → prediction pipeline."""
@@ -52,53 +58,75 @@ class BettingOrchestrator:
     # ── Public API ────────────────────────────────────────────────────────────
 
     def predict_fixture(self, fixture: Fixture) -> BettingPrediction:
-        """Run a full prediction for a single fixture."""
+        """
+        Run a full prediction for a single fixture.
+
+        Pipeline:
+          1. Data gathering
+          1b. Bayesian shrinkage
+          1c. Form weighting (exponential decay on last 5 games)
+          1d. FBref data quality validation
+          [2-4. LLM path — only when USE_LLM=true]
+          5. Poisson goals model (H2H + neutral venue aware)
+          6. Poisson corners model
+          7. Poisson cards model (referee factor)
+        """
         logger.info("=== Predicting: %s vs %s (%s) ===",
                     fixture.home_team, fixture.away_team, fixture.competition)
-
-        # 1. Gather all data
-        report = self._build_match_report(fixture)
-
-        # 1b. Apply Bayesian shrinkage (pulls early-season noise toward league avg)
-        apply_shrinkage(report.home_stats, fixture.competition_code)
-        apply_shrinkage(report.away_stats, fixture.competition_code)
-
-        # 2. Generate seed document
-        seed_text, pred_prompt = build_seed_document(report)
 
         match_label = (
             f"{fixture.home_team} vs {fixture.away_team} — "
             f"{fixture.competition} {fixture.match_date.strftime('%d/%m/%Y')}"
         )
 
-        # 3. Run MiroFish
-        result = self.mf_client.run_match_prediction(
-            seed_text=seed_text,
-            prediction_prompt=pred_prompt,
-            match_label=match_label,
-            simulation_rounds=10,
-        )
+        # 1. Gather all data
+        report = self._build_match_report(fixture)
 
-        if result["status"] != "success":
-            raise RuntimeError(f"MiroFish pipeline failed: {result.get('error')}")
+        # 1b. Bayesian shrinkage
+        apply_shrinkage(report.home_stats, fixture.competition_code)
+        apply_shrinkage(report.away_stats, fixture.competition_code)
 
-        # 4. Parse LLM predictions
-        prediction = self.parser.parse(result["report_markdown"])
+        # 1c. Blend in recent form (exponential decay)
+        self._apply_form_weighting(report.home_stats, report.home_form)
+        self._apply_form_weighting(report.away_stats, report.away_form)
+
+        # 1d. Warn on data gaps
+        self._validate_fbref_stats(report.home_stats)
+        self._validate_fbref_stats(report.away_stats)
+
+        # ── LLM path (optional) ───────────────────────────────────────────────
+        if _USE_LLM:
+            seed_text, pred_prompt = build_seed_document(report)
+            result = self.mf_client.run_match_prediction(
+                seed_text=seed_text,
+                prediction_prompt=pred_prompt,
+                match_label=match_label,
+                simulation_rounds=10,
+            )
+            if result["status"] != "success":
+                raise RuntimeError(f"MiroFish pipeline failed: {result.get('error')}")
+            prediction = self.parser.parse(result["report_markdown"])
+            logger.info("LLM prediction parsed (source: %s)", prediction.parse_source)
+        else:
+            logger.info("LLM skipped (USE_LLM=false) — using Poisson-only pipeline")
+            prediction = BettingPrediction()
+
         prediction.match = match_label
         prediction.competition = fixture.competition
 
-        # 5. Override predictions with Poisson model (more reliable than LLM)
+        # ── 5. Poisson goals model ────────────────────────────────────────────
         try:
             poisson = compute_poisson(
                 report.home_stats,
                 report.away_stats,
                 fixture.competition_code,
+                head_to_head=report.head_to_head,
+                is_neutral=fixture.is_neutral,
             )
             prediction.most_likely_scoreline  = poisson.most_likely_scoreline
             prediction.poisson_lambda_home    = poisson.lambda_home
             prediction.poisson_lambda_away    = poisson.lambda_away
             prediction.poisson_top_scorelines = poisson.top_scorelines(8)
-            # Override goal markets — Poisson is more reliable than LLM
             prediction.home_win_pct   = poisson.home_win_pct
             prediction.draw_pct       = poisson.draw_pct
             prediction.away_win_pct   = poisson.away_win_pct
@@ -108,6 +136,7 @@ class BettingOrchestrator:
             prediction.under_3_5_pct  = poisson.under_3_5_pct
             prediction.btts_yes_pct   = poisson.btts_yes_pct
             prediction.btts_no_pct    = poisson.btts_no_pct
+            prediction.confidence     = self._poisson_confidence(poisson)
             logger.info(
                 "Poisson goals: λ_home=%.2f λ_away=%.2f → %s "
                 "(1X2: %.1f/%.1f/%.1f, O2.5: %.1f%%, O3.5: %.1f%%, BTTS: %.1f%%)",
@@ -118,40 +147,36 @@ class BettingOrchestrator:
         except Exception as e:
             logger.warning("Poisson goals model failed (non-fatal): %s", e)
 
-        # 6. Override corner predictions with Poisson model (venue-specific)
+        # ── 6. Poisson corners ────────────────────────────────────────────────
         try:
-            # Prefer venue-specific split; fall back to overall corners_pg
             home_cpg = (report.home_stats.corners_home_pg
                         if report.home_stats.corners_home_pg > 0
                         else report.home_stats.corners_pg)
             away_cpg = (report.away_stats.corners_away_pg
                         if report.away_stats.corners_away_pg > 0
                         else report.away_stats.corners_pg)
-            corner_poisson = compute_corner_poisson(
-                home_cpg,
-                away_cpg,
-                fixture.competition_code,
-            )
+            corner_poisson = compute_corner_poisson(home_cpg, away_cpg, fixture.competition_code)
             if corner_poisson:
                 prediction.over_9_5_corners_pct  = corner_poisson.over_9_5_corners_pct
                 prediction.under_9_5_corners_pct = corner_poisson.under_9_5_corners_pct
                 prediction.poisson_corners_lambda = corner_poisson.lambda_corners
                 logger.info(
-                    "Poisson corners: λ=%.2f (home_cpg=%.2f away_cpg=%.2f) → O9.5: %.1f%%",
-                    corner_poisson.lambda_corners, home_cpg, away_cpg,
-                    corner_poisson.over_9_5_corners_pct,
+                    "Poisson corners: λ=%.2f → O9.5: %.1f%%",
+                    corner_poisson.lambda_corners, corner_poisson.over_9_5_corners_pct,
                 )
         except Exception as e:
             logger.warning("Poisson corners model failed (non-fatal): %s", e)
 
-        # 7. Override card predictions with Poisson model
+        # ── 7. Poisson cards (with referee factor) ────────────────────────────
         try:
+            referee_factor = self._referee_factor(fixture)
             cards_poisson = compute_cards_poisson(
                 report.home_stats.yellow_cards_pg,
                 report.away_stats.yellow_cards_pg,
                 report.home_stats.red_cards_pg,
                 report.away_stats.red_cards_pg,
                 fixture.competition_code,
+                referee_factor=referee_factor,
             )
             if cards_poisson:
                 prediction.over_3_5_cards_pct   = cards_poisson.over_3_5_yellow_pct
@@ -159,17 +184,13 @@ class BettingOrchestrator:
                 prediction.over_4_5_yellow_pct  = cards_poisson.over_4_5_yellow_pct
                 prediction.under_4_5_yellow_pct = cards_poisson.under_4_5_yellow_pct
                 prediction.poisson_cards_lambda  = cards_poisson.lambda_yellow
-                # P(at least one red card) from Poisson(lambda_red)
-                import math as _math
                 prediction.red_card_pct = round(
-                    (1.0 - _math.exp(-cards_poisson.lambda_red)) * 100, 1
+                    (1.0 - math.exp(-cards_poisson.lambda_red)) * 100, 1
                 )
                 logger.info(
-                    "Poisson cards: λ_y=%.2f → O3.5Y: %.1f%% O4.5Y: %.1f%% red: %.1f%%",
-                    cards_poisson.lambda_yellow,
-                    cards_poisson.over_3_5_yellow_pct,
-                    cards_poisson.over_4_5_yellow_pct,
-                    prediction.red_card_pct,
+                    "Poisson cards: λ_y=%.2f (ref_factor=%.2f) → O3.5Y: %.1f%% red: %.1f%%",
+                    cards_poisson.lambda_yellow, referee_factor,
+                    cards_poisson.over_3_5_yellow_pct, prediction.red_card_pct,
                 )
         except Exception as e:
             logger.warning("Poisson cards model failed (non-fatal): %s", e)
@@ -333,6 +354,118 @@ class BettingOrchestrator:
             if default_factory:
                 return default_factory()
             return None
+
+    # ── New helpers ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _apply_form_weighting(
+        stats: TeamStats,
+        form,
+        decay: float = 0.75,
+        max_recent_weight: float = 0.30,
+    ) -> None:
+        """
+        Blend season-average stats with exponentially-weighted recent form (in-place).
+
+        Each game back from most-recent gets multiplied by `decay`.
+        The blend weight reaches max_recent_weight (30%) when ≥5 recent games available.
+        Using actual recent goals as a proxy for attacking/defensive form trend.
+        """
+        def _weighted_avg(values: list) -> float | None:
+            if not values:
+                return None
+            n = len(values)
+            weights = [decay ** (n - 1 - i) for i in range(n)]
+            w_sum = sum(weights)
+            return sum(v * w for v, w in zip(values, weights)) / w_sum
+
+        recent_scored   = _weighted_avg(getattr(form, "goals_scored",   []))
+        recent_conceded = _weighted_avg(getattr(form, "goals_conceded", []))
+
+        n_games = len(getattr(form, "goals_scored", []) or [])
+        w = min(n_games / 5, 1.0) * max_recent_weight  # 0 → max_recent_weight as n→5
+
+        if recent_scored is not None:
+            if stats.goals_scored_pg > 0:
+                stats.goals_scored_pg = round(
+                    stats.goals_scored_pg * (1 - w) + recent_scored * w, 3)
+            if stats.xg_pg > 0:
+                stats.xg_pg = round(stats.xg_pg * (1 - w) + recent_scored * w, 3)
+
+        if recent_conceded is not None:
+            if stats.goals_conceded_pg > 0:
+                stats.goals_conceded_pg = round(
+                    stats.goals_conceded_pg * (1 - w) + recent_conceded * w, 3)
+            if stats.xga_pg > 0:
+                stats.xga_pg = round(stats.xga_pg * (1 - w) + recent_conceded * w, 3)
+
+        if n_games > 0 and w > 0:
+            logger.debug(
+                "Form weighting %s: w=%.2f (n=%d) scored %.2f→%.2f conceded %.2f→%.2f",
+                stats.team_name, w, n_games,
+                recent_scored or 0, stats.goals_scored_pg,
+                recent_conceded or 0, stats.goals_conceded_pg,
+            )
+
+    @staticmethod
+    def _validate_fbref_stats(stats: TeamStats) -> None:
+        """Log a warning when critical FBref fields are missing (zero = not scraped)."""
+        gaps = [f for f in ("xg_pg", "xga_pg", "corners_pg", "yellow_cards_pg")
+                if getattr(stats, f, 0.0) == 0.0]
+        if gaps:
+            logger.warning(
+                "FBref data gap for %s — fields missing: %s. "
+                "Poisson will use league-average fallback for these.",
+                stats.team_name, ", ".join(gaps),
+            )
+
+    @staticmethod
+    def _poisson_confidence(poisson) -> str:
+        """Derive prediction confidence from the dominant outcome probability."""
+        dominant = max(poisson.home_win_pct, poisson.draw_pct, poisson.away_win_pct)
+        if dominant >= 60:
+            return "high"
+        if dominant >= 45:
+            return "medium"
+        return "low"
+
+    def _referee_factor(self, fixture: Fixture) -> float:
+        """
+        Look up the assigned referee's yellow-cards-per-game rate and return
+        a multiplier relative to the competition average.
+
+        Returns 1.0 when no referee is known or no stats are available.
+        """
+        if not fixture.referee:
+            return 1.0
+
+        from predictor.poisson import LEAGUE_AVG_CARDS, _DEFAULT_AVG_CARDS
+        ref_stats = self._safe(
+            lambda: self.fbref.get_referee_stats(fixture.competition_code),
+            default_factory=dict,
+        ) or {}
+
+        ref_yellow_pg = ref_stats.get(fixture.referee)
+        if not ref_yellow_pg:
+            # Partial name match (e.g. "C. Taylor" vs "Craig Taylor")
+            ref_lower = fixture.referee.lower()
+            for name, val in ref_stats.items():
+                if any(part in name.lower() for part in ref_lower.split() if len(part) > 2):
+                    ref_yellow_pg = val
+                    break
+
+        if not ref_yellow_pg:
+            return 1.0
+
+        league_avg = LEAGUE_AVG_CARDS.get(
+            fixture.competition_code, _DEFAULT_AVG_CARDS
+        )["yellow"]
+        factor = round(ref_yellow_pg / league_avg, 3) if league_avg > 0 else 1.0
+        logger.info(
+            "Referee %s: %.2f Y/game vs league avg %.2f → factor %.3f",
+            fixture.referee, ref_yellow_pg, league_avg, factor,
+        )
+        return factor
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
