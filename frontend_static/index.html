@@ -118,6 +118,7 @@
     .pill{flex:1;text-align:center;padding:6px 4px;border-radius:5px;font-size:.78rem;line-height:1.3}
     .pill.hot{background:#1a3a1a;color:#3fb950}
     .pill.cool{background:#21262d;color:#6e7681}
+    .pill.value{background:#1a3000;border:1px solid #238636;color:#3fb950}
 
     /* Scoreline */
     .scoreline{display:flex;align-items:center;gap:10px;margin-top:14px;padding:8px 12px;background:#161b22;border-radius:8px;font-size:.85rem}
@@ -281,8 +282,8 @@
           <div v-for="m in mkts(p)" :key="m.label" class="mkt-card">
             <div class="mkt-lbl">{{ m.label }}</div>
             <div class="pill-row">
-              <span :class="['pill', m.a>=50?'hot':'cool']">{{ m.aLbl }}<br><strong>{{ m.a }}%</strong></span>
-              <span :class="['pill', m.b>m.a?'hot':'cool']">{{ m.bLbl }}<br><strong>{{ m.b }}%</strong></span>
+              <span :class="['pill', m.aEdge ? 'value' : m.a>=50?'hot':'cool']">{{ m.aLbl }}<br><strong>{{ m.a }}%</strong><span v-if="m.aEdge" style="display:block;font-size:.66rem;color:#3fb950;margin-top:1px">⚡ +{{ m.aEdge }}%</span></span>
+              <span :class="['pill', m.bEdge ? 'value' : m.b>m.a?'hot':'cool']">{{ m.bLbl }}<br><strong>{{ m.b }}%</strong><span v-if="m.bEdge" style="display:block;font-size:.66rem;color:#3fb950;margin-top:1px">⚡ +{{ m.bEdge }}%</span></span>
             </div>
           </div>
         </div>
@@ -762,13 +763,36 @@ createApp({
       return 'cl'
     }
     function mkts(p) {
+      const c = (p.live_odds && p.live_odds.consensus) || {}
+
+      // De-vig two-way market → [impliedA%, impliedB%]
+      function imp2(o1, o2) {
+        if (!o1 || !o2 || o1 <= 1 || o2 <= 1) return [null, null]
+        const p1 = 1/o1, p2 = 1/o2, tot = p1 + p2
+        return [Math.round(p1/tot*1000)/10, Math.round(p2/tot*1000)/10]
+      }
+      // Return edge value if >= 2%, else null
+      function edgeFmt(modelPct, impliedPct) {
+        if (impliedPct === null) return null
+        const e = Math.round((modelPct - impliedPct) * 10) / 10
+        return e >= 2 ? e : null
+      }
+
+      const [io25, iu25] = imp2(c.over_2_5,  c.under_2_5)
+      const [io35, iu35] = imp2(c.over_3_5,  c.under_3_5)
+      const [iby,  ibn]  = imp2(c.btts_yes,  c.btts_no)
+
       const crnLbl = p.poisson_corners_lambda
-        ? `Corners O/U 9.5 (λ=${p.poisson_corners_lambda})`
+        ? `Corners O/U 9.5 (~${p.poisson_corners_lambda} exp.)`
         : 'Corners O/U 9.5'
+
       return [
-        {label:'Goals O/U 2.5', aLbl:'Over', bLbl:'Under', a:p.over_2_5_pct, b:p.under_2_5_pct},
-        {label:'Goals O/U 3.5', aLbl:'Over', bLbl:'Under', a:p.over_3_5_pct, b:p.under_3_5_pct},
-        {label:'BTTS',           aLbl:'Yes',  bLbl:'No',    a:p.btts_yes_pct, b:p.btts_no_pct},
+        {label:'Goals O/U 2.5', aLbl:'Over', bLbl:'Under', a:p.over_2_5_pct, b:p.under_2_5_pct,
+         aEdge:edgeFmt(p.over_2_5_pct,io25), bEdge:edgeFmt(p.under_2_5_pct,iu25)},
+        {label:'Goals O/U 3.5', aLbl:'Over', bLbl:'Under', a:p.over_3_5_pct, b:p.under_3_5_pct,
+         aEdge:edgeFmt(p.over_3_5_pct,io35), bEdge:edgeFmt(p.under_3_5_pct,iu35)},
+        {label:'BTTS',           aLbl:'Yes',  bLbl:'No',    a:p.btts_yes_pct, b:p.btts_no_pct,
+         aEdge:edgeFmt(p.btts_yes_pct,iby), bEdge:edgeFmt(p.btts_no_pct,ibn)},
         {label:crnLbl,           aLbl:'Over', bLbl:'Under', a:p.over_9_5_corners_pct, b:p.under_9_5_corners_pct},
         {label:'Cards O/U 3.5',  aLbl:'Over', bLbl:'Under', a:p.over_3_5_cards_pct, b:p.under_3_5_cards_pct},
         {label:'Red Card',       aLbl:'Yes',  bLbl:'No',    a:p.red_card_pct, b:Math.round((100-p.red_card_pct)*10)/10},
