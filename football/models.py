@@ -125,6 +125,8 @@ class Fixture(BaseModel):
     away_score: Optional[int] = None
     matchday: Optional[int] = None
     stage: Optional[str] = None    # for UCL: GROUP_STAGE, KNOCKOUT, etc.
+    referee: Optional[str] = None
+    is_neutral: bool = False        # True when match is played at a neutral venue
 
 
 class MatchReport(BaseModel):
