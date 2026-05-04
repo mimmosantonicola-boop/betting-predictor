@@ -320,6 +320,31 @@ _COUNTERPART: dict[str, str] = {
 
 MIN_EDGE_PCT = 3.0
 
+
+def _odds_age_label(fetched_at: str | None) -> str:
+    """Return human-readable age like '2h ago', empty string if unknown."""
+    if not fetched_at:
+        return ""
+    try:
+        dt = datetime.fromisoformat(fetched_at)
+        age_s = (datetime.now(timezone.utc) - dt).total_seconds()
+        if age_s < 3600:
+            return f"{int(age_s // 60)}m ago"
+        return f"{age_s / 3600:.1f}h ago"
+    except (ValueError, TypeError):
+        return ""
+
+
+def _is_odds_stale(fetched_at: str | None, warn_hours: int = 12) -> bool:
+    """Return True if odds are older than warn_hours or timestamp is absent."""
+    if not fetched_at:
+        return True
+    try:
+        dt = datetime.fromisoformat(fetched_at)
+        return (datetime.now(timezone.utc) - dt).total_seconds() > warn_hours * 3600
+    except (ValueError, TypeError):
+        return True
+
 _MARKET_LABELS: dict[str, str] = {
     "home_win": "Home Win", "draw": "Draw", "away_win": "Away Win",
     "over_2_5": "Over 2.5", "under_2_5": "Under 2.5",
@@ -575,6 +600,7 @@ def predict():
                     fixture.away_team,
                 )
                 data["live_odds"] = odds
+                data["odds_fetched_at"] = datetime.now(timezone.utc).isoformat()
         except Exception:
             pass
         _save_pred(
@@ -722,11 +748,15 @@ def value_bets():
 
         if bets:
             bets.sort(key=lambda x: x["edge"], reverse=True)
+            fetched_at = p.get("odds_fetched_at")
             results.append({
-                "fixture_id":  p["fixture_id"],
-                "match_label": p.get("match_label", ""),
-                "competition": p.get("competition", ""),
-                "bets":        bets,
+                "fixture_id":    p["fixture_id"],
+                "match_label":   p.get("match_label", ""),
+                "competition":   p.get("competition", ""),
+                "odds_fetched_at": fetched_at,
+                "odds_age":      _odds_age_label(fetched_at),
+                "odds_stale":    _is_odds_stale(fetched_at),
+                "bets":          bets,
             })
 
     results.sort(key=lambda x: max(b["edge"] for b in x["bets"]), reverse=True)
